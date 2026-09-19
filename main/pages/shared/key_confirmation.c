@@ -6,9 +6,12 @@
 #include "../../qr/encoder.h"
 #include "../../ui/assets/icons.h"
 #include "../../ui/dialog.h"
+#include "../../ui/language_selector.h"
 #include "../../ui/oneshot.h"
 #include "../../ui/theme_widgets.h"
+#include "../../utils/bip39_lang.h"
 #include "../../utils/memory_utils.h"
+#include "../../utils/secure_mem.h"
 #include "../../utils/session_cleanup.h"
 #include <lvgl.h>
 #include <string.h>
@@ -20,6 +23,8 @@ static ui_oneshot_t loading_timer;
 static void (*return_callback)(void) = NULL;
 static void (*success_callback)(void) = NULL;
 static char *mnemonic_content = NULL;
+
+static void proceed_with_confirmation(void);
 
 static void loading_timer_cb(lv_timer_t *timer) {
   (void)timer;
@@ -95,9 +100,51 @@ static void create_ui(const char *fingerprint_hex) {
   ui_oneshot_start(&loading_timer, loading_timer_cb, LOADING_DELAY_MS);
 }
 
+/* Replaces mnemonic_content with its translation into `lang`, by shared
+ * BIP39 index (see bip39_lang_translate_to) -- same wallet, different
+ * display words. Leaves mnemonic_content untouched if translation fails,
+ * which bip39_lang_translate_to only does for a mnemonic that was already
+ * invalid. */
+static void translate_mnemonic_content(bip39_lang_t lang) {
+  if (!mnemonic_content)
+    return;
+
+  char translated[BIP39_LANG_MAX_MNEMONIC_LEN];
+  if (!bip39_lang_translate_to(mnemonic_content, lang, translated,
+                               sizeof(translated)))
+    return;
+
+  char *new_content = kern_secret_strdup(translated);
+  secure_memzero(translated, sizeof(translated));
+  if (new_content) {
+    SAFE_FREE_STATIC(mnemonic_content);
+    mnemonic_content = new_content;
+  }
+}
+
+static void lang_choice_back_cb(void) {
+  if (return_callback)
+    return_callback();
+}
+
+static void on_lang_chosen(bip39_lang_t lang) {
+  translate_mnemonic_content(lang);
+  proceed_with_confirmation();
+}
+
+static void proceed_with_confirmation(void) {
+  char fingerprint_hex[BIP32_KEY_FINGERPRINT_LEN * 2 + 1];
+  if (!key_mnemonic_fingerprint_hex(mnemonic_content, fingerprint_hex)) {
+    dialog_show_error_timeout("Failed to process mnemonic", return_callback, 0);
+    return;
+  }
+
+  create_ui(fingerprint_hex);
+}
+
 void key_confirmation_page_create(lv_obj_t *parent, void (*return_cb)(void),
                                   void (*success_cb)(void), const char *content,
-                                  size_t content_len) {
+                                  size_t content_len, bool offer_lang_choice) {
   session_cleanup_register(key_confirmation_page_destroy);
   (void)parent;
   return_callback = return_cb;
@@ -112,13 +159,11 @@ void key_confirmation_page_create(lv_obj_t *parent, void (*return_cb)(void),
     return;
   }
 
-  char fingerprint_hex[BIP32_KEY_FINGERPRINT_LEN * 2 + 1];
-  if (!key_mnemonic_fingerprint_hex(mnemonic_content, fingerprint_hex)) {
-    dialog_show_error_timeout("Failed to process mnemonic", return_callback, 0);
-    return;
-  }
-
-  create_ui(fingerprint_hex);
+  if (offer_lang_choice)
+    ui_mnemonic_lang_selector_create(lv_screen_active(), lang_choice_back_cb,
+                                     on_lang_chosen);
+  else
+    proceed_with_confirmation();
 }
 
 void key_confirmation_page_show(void) {

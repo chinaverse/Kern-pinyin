@@ -19,3 +19,7 @@ int kern_bip39_mnemonic_to_seed(const char *mnemonic, const char *passphrase,
                                 size_t *written);
 int kern_bip39_mnemonic_to_seed512(const char *mnemonic, const char *passphrase,
                                    unsigned char *out, size_t len);
+
+/* BIP39 Chinese (simplified) wordlist, always compiled in regardless of
+ * BUILD_MINIMAL. See kern_wally_zh.c. Never freed or modified by callers. */
+const struct words *kern_bip39_zh_wordlist(void);

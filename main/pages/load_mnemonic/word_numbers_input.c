@@ -3,12 +3,15 @@
 
 #include "word_numbers_input.h"
 #include "../../ui/dialog.h"
+#include "../../ui/language_selector.h"
 #include "../../ui/numeric_keypad.h"
 #include "../../ui/theme_widgets.h"
 #include "../../ui/word_selector.h"
+#include "../../utils/bip39_lang.h"
 #include "../../utils/secure_mem.h"
 #include "../../utils/session_cleanup.h"
 #include "../shared/mnemonic_editor.h"
+#include "kern_wally.h"
 #include <stdio.h>
 #include <wally_bip39.h>
 
@@ -17,12 +20,15 @@
 
 static lv_obj_t *word_numbers_screen = NULL;
 static ui_numeric_keypad_t *keypad = NULL;
-static struct words *bip39_wordlist = NULL;
+static const struct words *bip39_wordlist = NULL;
 static void (*return_callback)(void) = NULL;
 static void (*success_callback)(void) = NULL;
 static uint16_t entered_numbers[MAX_WORDS];
 static size_t target_word_count = 0;
 static size_t current_word_index = 0;
+
+static void create_lang_menu(void);
+static void on_lang_selected(bip39_lang_t lang);
 
 static const char *word_for_number(uint16_t number) {
   if (!bip39_wordlist || number < 1 || number > 2048)
@@ -95,10 +101,7 @@ static void open_word_keypad(uint16_t initial) {
   ui_numeric_keypad_open(&keypad, &config);
 }
 
-static void word_count_back_cb(void) {
-  if (return_callback)
-    return_callback();
-}
+static void word_count_back_cb(void) { create_lang_menu(); }
 
 static void word_count_selected_cb(int word_count) {
   target_word_count = (size_t)word_count;
@@ -107,6 +110,36 @@ static void word_count_selected_cb(int word_count) {
   if (word_numbers_screen)
     lv_obj_add_flag(word_numbers_screen, LV_OBJ_FLAG_HIDDEN);
   open_word_keypad(0);
+}
+
+static void lang_back_cb(void) {
+  if (return_callback)
+    return_callback();
+}
+
+static void on_lang_selected(bip39_lang_t lang) {
+  if (lang == BIP39_LANG_ZH) {
+    bip39_wordlist = kern_bip39_zh_wordlist();
+  } else {
+    struct words *en_wordlist = NULL;
+    bip39_get_wordlist(NULL, &en_wordlist);
+    bip39_wordlist = en_wordlist;
+  }
+
+  if (!bip39_wordlist) {
+    dialog_show_error_timeout("Failed to load wordlist", return_callback, 0);
+    return;
+  }
+
+  ui_word_count_selector_create(word_numbers_screen, word_count_back_cb,
+                                word_count_selected_cb);
+}
+
+static void create_lang_menu(void) {
+  if (word_numbers_screen)
+    lv_obj_clear_flag(word_numbers_screen, LV_OBJ_FLAG_HIDDEN);
+  ui_mnemonic_lang_selector_create(word_numbers_screen, lang_back_cb,
+                                   on_lang_selected);
 }
 
 void word_numbers_input_page_create(lv_obj_t *parent, void (*return_cb)(void),
@@ -120,16 +153,10 @@ void word_numbers_input_page_create(lv_obj_t *parent, void (*return_cb)(void),
   secure_memzero(entered_numbers, sizeof(entered_numbers));
   target_word_count = 0;
   current_word_index = 0;
-
-  if (bip39_get_wordlist(NULL, &bip39_wordlist) != WALLY_OK ||
-      !bip39_wordlist) {
-    dialog_show_error_timeout("Failed to load wordlist", return_cb, 0);
-    return;
-  }
+  bip39_wordlist = NULL;
 
   word_numbers_screen = theme_create_page_container(parent);
-  ui_word_count_selector_create(word_numbers_screen, word_count_back_cb,
-                                word_count_selected_cb);
+  create_lang_menu();
 }
 
 void word_numbers_input_page_show(void) {

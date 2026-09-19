@@ -1,4 +1,5 @@
 #include "key.h"
+#include "../utils/bip39_lang.h"
 #include "../utils/secure_mem.h"
 #include "bip32_path.h"
 #include "kern_wally.h"
@@ -45,13 +46,23 @@ bool key_load_from_mnemonic(const char *mnemonic, const char *passphrase,
   int ret;
   unsigned char seed[BIP39_SEED_LEN_512];
 
-  ret = bip39_mnemonic_validate(NULL, mnemonic);
+  ret = bip39_lang_validate(mnemonic);
   if (ret != WALLY_OK) {
     return false;
   }
 
-  ret =
-      kern_bip39_mnemonic_to_seed512(mnemonic, passphrase, seed, sizeof(seed));
+  // Seed derivation always runs on the English wordlist's text: a Chinese
+  // mnemonic is translated word-for-word by its shared BIP39 index first
+  // (see bip39_lang.h). This keeps the actual PBKDF2 derivation below
+  // identical regardless of which language the wallet is entered/shown in.
+  char *seed_mnemonic = bip39_lang_to_english_secret(mnemonic);
+  if (!seed_mnemonic) {
+    return false;
+  }
+
+  ret = kern_bip39_mnemonic_to_seed512(seed_mnemonic, passphrase, seed,
+                                       sizeof(seed));
+  SECURE_FREE_STRING(seed_mnemonic);
   if (ret != WALLY_OK) {
     secure_memzero(seed, sizeof(seed));
     return false;
@@ -121,7 +132,11 @@ bool key_mnemonic_passphrase_fingerprint_hex(const char *mnemonic,
   if (!mnemonic || !hex_out)
     return false;
 
-  if (bip39_mnemonic_validate(NULL, mnemonic) != WALLY_OK)
+  if (bip39_lang_validate(mnemonic) != WALLY_OK)
+    return false;
+
+  char *seed_mnemonic = bip39_lang_to_english_secret(mnemonic);
+  if (!seed_mnemonic)
     return false;
 
   unsigned char seed[BIP39_SEED_LEN_512];
@@ -129,7 +144,7 @@ bool key_mnemonic_passphrase_fingerprint_hex(const char *mnemonic,
   struct ext_key *mnemonic_key = NULL;
   bool ok = false;
 
-  if (kern_bip39_mnemonic_to_seed512(mnemonic, passphrase, seed,
+  if (kern_bip39_mnemonic_to_seed512(seed_mnemonic, passphrase, seed,
                                      sizeof(seed)) != WALLY_OK ||
       kern_bip32_key_from_seed_alloc(seed, sizeof(seed), BIP32_VER_MAIN_PRIVATE,
                                      0, &mnemonic_key) != WALLY_OK)
@@ -146,6 +161,7 @@ cleanup:
   if (mnemonic_key)
     bip32_key_free(mnemonic_key);
   secure_memzero(seed, sizeof(seed));
+  SECURE_FREE_STRING(seed_mnemonic);
   return ok;
 }
 

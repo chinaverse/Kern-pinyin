@@ -15,6 +15,7 @@
 #include "../shared/descriptor_loader.h"
 #include "../shared/kef_decrypt_page.h"
 #include "../shared/key_confirmation.h"
+#include "../../utils/bip39_lang.h"
 #include <lvgl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,7 +65,7 @@ static void success_from_kef_decrypt_cb(const uint8_t *data, size_t len) {
   /* key_confirmation copies data, so create before destroying the kef page */
   key_confirmation_page_create(
       lv_screen_active(), return_from_key_confirmation_cb,
-      success_from_key_confirmation_cb, (const char *)data, len);
+      success_from_key_confirmation_cb, (const char *)data, len, true);
   key_confirmation_page_show();
   kef_decrypt_page_destroy();
 }
@@ -143,14 +144,15 @@ static bool try_mnemonic(const char *content, size_t len) {
   // Plaintext / SeedQR: only treat as a mnemonic if it actually validates, so
   // descriptors fall through to the watch-only path.
   char *mnemonic = mnemonic_qr_to_mnemonic(content, len, NULL);
-  bool valid = mnemonic && bip39_mnemonic_validate(NULL, mnemonic) == WALLY_OK;
+  bool valid = mnemonic && bip39_lang_validate(mnemonic) == WALLY_OK;
   SECURE_FREE_STRING(mnemonic);
   if (!valid)
     return false;
 
   key_confirmation_page_create(lv_screen_active(),
                                return_from_key_confirmation_cb,
-                               success_from_key_confirmation_cb, content, len);
+                               success_from_key_confirmation_cb, content, len,
+                               true);
   key_confirmation_page_show();
   return true;
 }

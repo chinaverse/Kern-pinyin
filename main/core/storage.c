@@ -504,13 +504,90 @@ esp_err_t storage_list_mnemonics(storage_location_t loc, char ***filenames_out,
   return item_list(&mnemonic_config, loc, exts, 1, filenames_out, count_out);
 }
 
+/* Derives "m_Foo.lang" (or "Foo.lang" on SD) from a ".kef" filename by
+ * substituting the extension. Both name the same mnemonic, so the two
+ * files always live side by side. */
+static bool derive_lang_filename(const char *kef_filename, char *out,
+                                 size_t out_size) {
+  if (!kef_filename || !filename_has_ext(kef_filename, STORAGE_MNEMONIC_EXT))
+    return false;
+
+  size_t stem_len = strlen(kef_filename) - strlen(STORAGE_MNEMONIC_EXT);
+  if (stem_len + strlen(STORAGE_MNEMONIC_LANG_EXT) >= out_size)
+    return false;
+
+  memcpy(out, kef_filename, stem_len);
+  snprintf(out + stem_len, out_size - stem_len, "%s", STORAGE_MNEMONIC_LANG_EXT);
+  return true;
+}
+
 esp_err_t storage_delete_mnemonic(storage_location_t loc,
                                   const char *filename) {
+  char lang_filename[48];
+  if (derive_lang_filename(filename, lang_filename, sizeof(lang_filename))) {
+    /* Best-effort: a missing .lang sidecar (the common case, English) is
+     * not an error and its result is deliberately ignored. */
+    item_delete(&mnemonic_config, loc, lang_filename);
+  }
   return item_delete(&mnemonic_config, loc, filename);
 }
 
 bool storage_mnemonic_exists(storage_location_t loc, const char *id) {
   return item_exists(&mnemonic_config, loc, id, STORAGE_MNEMONIC_EXT);
+}
+
+void storage_mnemonic_filename(storage_location_t loc, const char *id,
+                               char *out, size_t out_size) {
+  if (!out || out_size == 0)
+    return;
+
+  char sanitized[STORAGE_MAX_SANITIZED_ID_LEN + 1];
+  storage_sanitize_id(id, sanitized, sizeof(sanitized));
+  item_build_filename(&mnemonic_config, loc, sanitized, STORAGE_MNEMONIC_EXT,
+                      out, out_size);
+}
+
+esp_err_t storage_mark_mnemonic_chinese(storage_location_t loc,
+                                        const char *kef_filename) {
+  char lang_filename[48];
+  if (!derive_lang_filename(kef_filename, lang_filename, sizeof(lang_filename)))
+    return ESP_ERR_INVALID_ARG;
+
+  esp_err_t ret = item_init_location(&mnemonic_config, loc);
+  if (ret != ESP_OK)
+    return ret;
+
+  char path[96];
+  item_build_path(&mnemonic_config, loc, lang_filename, path, sizeof(path));
+
+  static const uint8_t marker[1] = {1};
+  if (loc == STORAGE_FLASH)
+    return write_flash_file(path, marker, sizeof(marker));
+  return sd_card_write_file(path, marker, sizeof(marker));
+}
+
+bool storage_mnemonic_is_chinese(storage_location_t loc,
+                                 const char *kef_filename) {
+  char lang_filename[48];
+  if (!derive_lang_filename(kef_filename, lang_filename, sizeof(lang_filename)))
+    return false;
+
+  if (loc == STORAGE_FLASH) {
+    if (storage_init() != ESP_OK)
+      return false;
+    char path[96];
+    item_build_path(&mnemonic_config, loc, lang_filename, path, sizeof(path));
+    struct stat st;
+    return stat(path, &st) == 0;
+  }
+
+  if (!sd_card_is_mounted())
+    return false;
+  char path[96];
+  item_build_path(&mnemonic_config, loc, lang_filename, path, sizeof(path));
+  bool exists = false;
+  sd_card_file_exists(path, &exists);
+  return exists;
 }
 
 /* ========== Descriptor public API (thin wrappers) ========== */

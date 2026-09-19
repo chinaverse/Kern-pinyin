@@ -1,4 +1,5 @@
 #include "encoder.h"
+#include "../utils/bip39_lang.h"
 #include "../utils/secure_mem.h"
 #include "kern_wally.h"
 #include "secure_memory.h"
@@ -105,19 +106,22 @@ static bool is_all_digits(const char *data, size_t len) {
 
 static bool looks_like_plaintext(const char *data, size_t len) {
   bool has_space = false;
-  bool has_letter = false;
+  bool has_word_char = false;
 
   for (size_t i = 0; i < len; i++) {
-    char c = data[i];
+    unsigned char c = (unsigned char)data[i];
     if (c == ' ') {
       has_space = true;
-    } else if (isalpha((unsigned char)c)) {
-      has_letter = true;
-    } else if (!isprint((unsigned char)c)) {
+    } else if (isalpha(c) || c >= 0x80) {
+      // isalpha() covers English BIP39 words; a byte with the high bit
+      // set covers UTF-8 encoded Chinese BIP39 words, which this check
+      // can't otherwise tell apart from arbitrary printable bytes.
+      has_word_char = true;
+    } else if (!isprint(c)) {
       return false;
     }
   }
-  return has_space && has_letter;
+  return has_space && has_word_char;
 }
 
 static bool has_non_printable(const char *data, size_t len) {
@@ -264,7 +268,7 @@ char *mnemonic_qr_to_mnemonic(const char *data, size_t len,
 
   case MNEMONIC_QR_PLAINTEXT: {
     char *mnemonic = kern_secret_strndup(data, len);
-    if (mnemonic && bip39_mnemonic_validate(NULL, mnemonic) != WALLY_OK) {
+    if (mnemonic && bip39_lang_validate(mnemonic) != WALLY_OK) {
       SECURE_FREE_STRING(mnemonic);
       return NULL;
     }
@@ -295,13 +299,23 @@ char *mnemonic_to_seedqr(const char *mnemonic) {
   }
 
   // Validate mnemonic first
-  if (bip39_mnemonic_validate(NULL, mnemonic) != WALLY_OK) {
+  if (bip39_lang_validate(mnemonic) != WALLY_OK) {
     return NULL;
   }
 
-  // Get the BIP39 wordlist
-  struct words *wordlist = NULL;
-  if (bip39_get_wordlist(NULL, &wordlist) != WALLY_OK || !wordlist) {
+  // Get the matching BIP39 wordlist -- SeedQR indices are shared across
+  // every official wordlist, so a Chinese mnemonic must be looked up
+  // against the Chinese wordlist here rather than the default English one.
+  const struct words *wordlist = NULL;
+  if (bip39_lang_detect(mnemonic) == BIP39_LANG_ZH) {
+    wordlist = kern_bip39_zh_wordlist();
+  } else {
+    struct words *en_wordlist = NULL;
+    if (bip39_get_wordlist(NULL, &en_wordlist) != WALLY_OK || !en_wordlist)
+      return NULL;
+    wordlist = en_wordlist;
+  }
+  if (!wordlist) {
     return NULL;
   }
 
@@ -386,13 +400,21 @@ unsigned char *mnemonic_to_compact_seedqr(const char *mnemonic,
     return NULL;
   }
 
-  if (bip39_mnemonic_validate(NULL, mnemonic) != WALLY_OK) {
+  if (bip39_lang_validate(mnemonic) != WALLY_OK) {
     return NULL;
   }
 
+  // Compact SeedQR is pure entropy: the same bytes come out regardless of
+  // which wordlist's text produced them, as long as we decode with the
+  // matching one. A Chinese mnemonic must therefore be decoded against
+  // the Chinese wordlist here, not the default English one.
+  const struct words *wl = (bip39_lang_detect(mnemonic) == BIP39_LANG_ZH)
+                               ? kern_bip39_zh_wordlist()
+                               : NULL;
+
   unsigned char entropy[32];
   size_t entropy_len = 0;
-  if (bip39_mnemonic_to_bytes(NULL, mnemonic, entropy, sizeof(entropy),
+  if (bip39_mnemonic_to_bytes(wl, mnemonic, entropy, sizeof(entropy),
                               &entropy_len) != WALLY_OK) {
     return NULL;
   }

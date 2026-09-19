@@ -7,6 +7,7 @@
 #include "../ui/dialog.h"
 #include "../ui/oneshot.h"
 #include "../ui/theme_widgets.h"
+#include "../utils/bip39_lang.h"
 #include "../utils/secure_mem.h"
 #include "../utils/session_cleanup.h"
 #include "shared/kef_encrypt_page.h"
@@ -31,6 +32,7 @@ static size_t compact_seedqr_len = 0;
 static const uint8_t *pending_envelope = NULL;
 static size_t pending_envelope_len = 0;
 static const char *pending_id = NULL;
+static bool pending_is_chinese = false;
 
 /* ---------- Navigation ---------- */
 
@@ -54,9 +56,20 @@ static void do_save(void) {
   esp_err_t ret = storage_save_mnemonic(target_location, pending_id,
                                         pending_envelope, pending_envelope_len);
 
+  if (ret == ESP_OK && pending_is_chinese) {
+    char filename[64];
+    storage_mnemonic_filename(target_location, pending_id, filename,
+                              sizeof(filename));
+    /* Best-effort: losing this hint only means the mnemonic redisplays in
+     * English after reload, not that the save itself failed. */
+    if (storage_mark_mnemonic_chinese(target_location, filename)) {
+    }
+  }
+
   pending_envelope = NULL;
   pending_envelope_len = 0;
   pending_id = NULL;
+  pending_is_chinese = false;
 
   if (progress_dialog) {
     lv_obj_del(progress_dialog);
@@ -85,6 +98,7 @@ static void overwrite_confirm_cb(bool confirmed, void *user_data) {
     pending_envelope = NULL;
     pending_envelope_len = 0;
     pending_id = NULL;
+    pending_is_chinese = false;
     if (progress_dialog) {
       lv_obj_del(progress_dialog);
       progress_dialog = NULL;
@@ -150,6 +164,7 @@ void store_mnemonic_page_create(lv_obj_t *parent, void (*return_cb)(void),
     return;
   }
 
+  pending_is_chinese = bip39_lang_detect(mnemonic) == BIP39_LANG_ZH;
   compact_seedqr_data =
       mnemonic_to_compact_seedqr(mnemonic, &compact_seedqr_len);
 
@@ -199,6 +214,7 @@ void store_mnemonic_page_destroy(void) {
   pending_envelope = NULL;
   pending_envelope_len = 0;
   pending_id = NULL;
+  pending_is_chinese = false;
 
   SECURE_FREE_BUFFER(compact_seedqr_data, compact_seedqr_len);
   compact_seedqr_len = 0;

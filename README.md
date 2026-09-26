@@ -48,6 +48,14 @@ git clone --depth 1 --recurse-submodules --shallow-submodules -b v6.1 https://gi
 . ~/esp/esp-idf/export.sh
 ```
 
+For formatting, host tests, and the desktop simulator, Nix users can enter the development shell:
+
+```bash
+nix develop
+```
+
+The Nix shell intentionally provides host tools only. Firmware builds still require the separate ESP-IDF v6.1 installation above; `just build` uses an existing `IDF_PATH` or falls back to `~/esp/esp-idf`.
+
 ## Build
 
 ### Cloning the Repository
@@ -85,6 +93,8 @@ just flash wave_5       # Flash for wave_5
 just monitor            # Serial monitor
 just clean              # Wipe all build_<board> dirs + sdkconfig
 ```
+
+ESP32-P4 chip revision v3.x needs its own image: ESP-IDF builds for either v0.x/v1.x or v3.x silicon, never both. Append `_v3` to any board (`just build wave_43_v3`, `just flash wave_43_v3`) to build with the `sdkconfig.rev3` overlay into `build_<board>_v3/`. The web flasher reads the chip revision on connect and picks the matching build.
 
 Or using `idf.py` directly:
 

@@ -150,7 +150,7 @@ void key_confirmation_page_create(lv_obj_t *parent, void (*return_cb)(void),
   return_callback = return_cb;
   success_callback = success_cb;
 
-  SAFE_FREE_STATIC(mnemonic_content);
+  SECURE_FREE_STRING(mnemonic_content);
   mnemonic_content = mnemonic_qr_to_mnemonic(content, content_len, NULL);
   if (!mnemonic_content) {
     dialog_show_error_timeout(
@@ -179,7 +179,7 @@ void key_confirmation_page_hide(void) {
 void key_confirmation_page_destroy(void) {
   session_cleanup_unregister(key_confirmation_page_destroy);
   ui_oneshot_cancel(&loading_timer);
-  SAFE_FREE_STATIC(mnemonic_content);
+  SECURE_FREE_STRING(mnemonic_content);
   if (key_confirmation_screen) {
     lv_obj_del(key_confirmation_screen);
     key_confirmation_screen = NULL;

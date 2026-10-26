@@ -9,6 +9,8 @@
 #include "../../ui/menu.h"
 #include "../../ui/theme_widgets.h"
 #include "../../utils/bip39_filter.h"
+#include "../../utils/bip39_filter_zh.h"
+#include "../../utils/bip39_lang.h"
 #include "../../utils/session_cleanup.h"
 #include "kern_wally.h"
 #include "key_confirmation.h"
@@ -25,6 +27,9 @@
 #include "../../utils/secure_mem.h"
 
 #define MAX_MNEMONIC_LEN 256
+// Large enough for either wordlist's candidate list at once (Chinese
+// pinyin homophone groups run larger than English prefix matches).
+#define MAX_FILTERED_WORDS BIP39_ZH_MAX_FILTERED_WORDS
 
 typedef enum {
   MODE_WORD_GRID,
@@ -54,7 +59,7 @@ static int editing_word_index = -1;
 
 static char current_prefix[BIP39_MAX_PREFIX_LEN + 1];
 static int prefix_len = 0;
-static const char *filtered_words[BIP39_MAX_FILTERED_WORDS];
+static const char *filtered_words[MAX_FILTERED_WORDS];
 static int filtered_count = 0;
 static editor_mode_t current_mode = MODE_WORD_GRID;
 static char pending_word[16] = {0};
@@ -80,6 +85,13 @@ static bool is_checksum_valid(void);
 static bool recalculate_last_word(void);
 static void update_checksum_ui(void);
 
+// The mnemonic's language is derived from its actual word bytes (see
+// bip39_lang_detect) rather than tracked as separate state, so it can
+// never drift out of sync with entered_words.
+static bip39_lang_t editor_current_lang(void) {
+  return total_words > 0 ? bip39_lang_detect(entered_words[0]) : BIP39_LANG_EN;
+}
+
 static bool is_checksum_valid(void) {
   char mnemonic[MAX_MNEMONIC_LEN];
   mnemonic[0] = '\0';
@@ -91,7 +103,7 @@ static bool is_checksum_valid(void) {
             sizeof(mnemonic) - strlen(mnemonic) - 1);
   }
 
-  bool valid = bip39_mnemonic_validate(NULL, mnemonic) == WALLY_OK;
+  bool valid = bip39_lang_validate(mnemonic) == WALLY_OK;
   secure_memzero(mnemonic, sizeof(mnemonic));
   return valid;
 }
@@ -126,12 +138,18 @@ static bool recalculate_last_word(void) {
   size_t entropy_bytes = entropy_bits / 8;
   size_t last_word_entropy_bits = 11 - checksum_bits; // 7 for 12, 3 for 24
 
+  bip39_lang_t lang = editor_current_lang();
+  const struct words *wl =
+      (lang == BIP39_LANG_ZH) ? kern_bip39_zh_wordlist() : NULL;
+
   // Pack word indices (11 bits each) from first N-1 words
   uint8_t packed[32] = {0};
   int bit_pos = 0;
 
   for (int i = 0; i < total_words - 1; i++) {
-    int idx = bip39_filter_get_word_index(entered_words[i]);
+    int idx = (lang == BIP39_LANG_ZH)
+                  ? bip39_filter_zh_get_word_index(entered_words[i])
+                  : bip39_filter_get_word_index(entered_words[i]);
     if (idx < 0)
       return false;
 
@@ -146,7 +164,9 @@ static bool recalculate_last_word(void) {
   }
 
   // Pack the entropy bits from the current last word (top bits only)
-  int last_idx = bip39_filter_get_word_index(entered_words[total_words - 1]);
+  int last_idx = (lang == BIP39_LANG_ZH)
+                     ? bip39_filter_zh_get_word_index(entered_words[total_words - 1])
+                     : bip39_filter_get_word_index(entered_words[total_words - 1]);
   if (last_idx >= 0) {
     for (int b = 10; b > (int)(10 - last_word_entropy_bits); b--) {
       int byte_idx = bit_pos / 8;
@@ -159,7 +179,7 @@ static bool recalculate_last_word(void) {
 
   // Generate mnemonic from entropy using libwally
   char *new_mnemonic = NULL;
-  if (kern_bip39_mnemonic_from_bytes(NULL, packed, entropy_bytes,
+  if (kern_bip39_mnemonic_from_bytes(wl, packed, entropy_bytes,
                                      &new_mnemonic) != WALLY_OK) {
     return false;
   }
@@ -222,8 +242,13 @@ static void update_checksum_ui(void) {
 }
 
 static void filter_words_by_prefix(void) {
-  filtered_count = bip39_filter_by_prefix(
-      current_prefix, prefix_len, filtered_words, BIP39_MAX_FILTERED_WORDS);
+  filtered_count = (editor_current_lang() == BIP39_LANG_ZH)
+                       ? bip39_filter_zh_by_prefix(current_prefix, prefix_len,
+                                                  filtered_words,
+                                                  MAX_FILTERED_WORDS)
+                       : bip39_filter_by_prefix(current_prefix, prefix_len,
+                                               filtered_words,
+                                               MAX_FILTERED_WORDS);
 }
 
 static void parse_mnemonic(const char *mnemonic) {
@@ -337,14 +362,20 @@ static void update_keyboard_state(void) {
            total_words);
   ui_keyboard_set_title(keyboard, title);
   ui_keyboard_set_input_text(keyboard, current_prefix);
-  ui_keyboard_set_letters_enabled(
-      keyboard, bip39_filter_get_valid_letters(current_prefix, prefix_len));
+
+  bool is_zh = editor_current_lang() == BIP39_LANG_ZH;
+  uint32_t valid_letters =
+      is_zh ? bip39_filter_zh_get_valid_letters(current_prefix, prefix_len)
+            : bip39_filter_get_valid_letters(current_prefix, prefix_len);
+  ui_keyboard_set_letters_enabled(keyboard, valid_letters);
   ui_keyboard_set_key_enabled(keyboard, UI_KB_KEY_BACKSPACE, prefix_len > 0);
 
-  int match_count = bip39_filter_count_matches(current_prefix, prefix_len);
+  int match_count =
+      is_zh ? bip39_filter_zh_count_matches(current_prefix, prefix_len)
+            : bip39_filter_count_matches(current_prefix, prefix_len);
   ui_keyboard_set_ok_enabled(keyboard,
                              prefix_len > 0 && match_count > 0 &&
-                                 match_count <= BIP39_MAX_FILTERED_WORDS);
+                                 match_count <= MAX_FILTERED_WORDS);
 }
 
 static void keyboard_back_btn_cb(lv_event_t *e) {
@@ -532,7 +563,7 @@ static void load_btn_cb(lv_event_t *e) {
             sizeof(mnemonic) - strlen(mnemonic) - 1);
   }
 
-  if (bip39_mnemonic_validate(NULL, mnemonic) != WALLY_OK) {
+  if (bip39_lang_validate(mnemonic) != WALLY_OK) {
     secure_memzero(mnemonic, sizeof(mnemonic));
     return;
   }
@@ -540,7 +571,8 @@ static void load_btn_cb(lv_event_t *e) {
   mnemonic_editor_page_hide();
   key_confirmation_page_create(lv_screen_active(),
                                return_from_key_confirmation_cb,
-                               success_callback, mnemonic, strlen(mnemonic));
+                               success_callback, mnemonic, strlen(mnemonic),
+                               false);
   key_confirmation_page_show();
   secure_memzero(mnemonic, sizeof(mnemonic));
 }
@@ -684,7 +716,7 @@ void mnemonic_editor_page_create(lv_obj_t *parent, void (*return_cb)(void),
   success_callback = success_cb;
   is_new_mnemonic = new_mnemonic;
 
-  if (!bip39_filter_init()) {
+  if (!bip39_filter_init() || !bip39_filter_zh_init()) {
     dialog_show_error_timeout("Failed to load wordlist", return_cb, 0);
     return;
   }

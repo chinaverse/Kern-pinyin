@@ -21,6 +21,7 @@
 #include "../../ui/dialog.h"
 #include "../../ui/oneshot.h"
 #include "../../ui/theme_widgets.h"
+#include "../../utils/bip39_lang.h"
 #include "../../utils/secure_mem.h"
 #include "../../utils/session_cleanup.h"
 #include "../load_descriptor_storage.h"
@@ -171,7 +172,7 @@ static void finish_dispatch(char *qr_content, size_t qr_content_len,
     if (!parse_success) {
       char *mnemonic =
           mnemonic_qr_to_mnemonic(qr_content, qr_content_len, NULL);
-      if (mnemonic && bip39_mnemonic_validate(NULL, mnemonic) == WALLY_OK) {
+      if (mnemonic && bip39_lang_validate(mnemonic) == WALLY_OK) {
         SECURE_FREE_STRING(mnemonic);
         scan_handle_mnemonic(qr_content, qr_content_len);
         SECURE_FREE_STRING(qr_content);

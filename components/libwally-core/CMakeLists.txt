@@ -1,5 +1,6 @@
 idf_component_register(SRCS
                        "kern_wally.c"
+                       "kern_wally_zh.c"
                        "upstream/src/amalgamation/combined.c"
                        INCLUDE_DIRS
                        "."

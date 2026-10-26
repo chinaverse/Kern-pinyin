@@ -5,19 +5,37 @@
 #include "../../../ui/dialog.h"
 #include "../../../ui/theme.h"
 #include "../../../ui/theme_widgets.h"
+#include "../../../utils/bip39_lang.h"
 #include "../../../utils/secure_mem.h"
 #include "../../../utils/session_cleanup.h"
 #include <lvgl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static lv_obj_t *mnemonic_screen = NULL;
+static lv_obj_t *content_container = NULL;
+static lv_obj_t *toggle_btn = NULL;
+static lv_obj_t *toggle_label = NULL;
 static void (*return_callback)(void) = NULL;
+// Which language the words are currently rendered in. Purely a display
+// choice -- see bip39_lang_translate_to() -- it never changes the
+// loaded wallet's actual mnemonic or keys.
+static bip39_lang_t display_lang = BIP39_LANG_EN;
 
 static void back_cb(lv_event_t *e) {
   (void)e;
   if (return_callback)
     return_callback();
+}
+
+static void build_content(void);
+
+static void toggle_lang_cb(lv_event_t *e) {
+  (void)e;
+  display_lang =
+      (display_lang == BIP39_LANG_ZH) ? BIP39_LANG_EN : BIP39_LANG_ZH;
+  build_content();
 }
 
 static lv_obj_t *create_word_column(lv_obj_t *parent) {
@@ -52,28 +70,56 @@ static void add_word_row(lv_obj_t *col, size_t index, const char *word,
   lv_obj_set_style_text_color(label, primary_color(), 0);
 }
 
-void mnemonic_words_page_create(lv_obj_t *parent, void (*return_cb)(void)) {
-  session_cleanup_register(mnemonic_words_page_destroy);
-  if (!parent || !key_is_loaded())
-    return;
+// (Re)builds the word grid for the current display_lang, tearing down any
+// previous one first. Called on initial page load and every language
+// toggle. Never touches the loaded wallet's actual mnemonic -- it only
+// re-renders a translated *view* of it (see bip39_lang_translate_to).
+static void build_content(void) {
+  if (content_container) {
+    lv_obj_del(content_container);
+    content_container = NULL;
+  }
 
-  return_callback = return_cb;
-
-  char **words = NULL;
-  size_t word_count = 0;
-  if (!key_get_mnemonic_words(&words, &word_count)) {
-    dialog_show_error_timeout("Not enough internal RAM for mnemonic", return_cb,
-                              0);
+  char *mnemonic = NULL;
+  if (!key_get_mnemonic(&mnemonic)) {
+    dialog_show_error_timeout("Not enough internal RAM for mnemonic",
+                              return_callback, 0);
     return;
   }
 
-  mnemonic_screen = theme_create_page_container(parent);
-  lv_obj_add_flag(mnemonic_screen, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(mnemonic_screen, back_cb, LV_EVENT_CLICKED, NULL);
+  char display_buf[BIP39_LANG_MAX_MNEMONIC_LEN];
+  if (!bip39_lang_translate_to(mnemonic, display_lang, display_buf,
+                               sizeof(display_buf))) {
+    /* Translation shouldn't fail for a mnemonic that loaded successfully;
+     * fall back to showing it in its original language rather than
+     * nothing. */
+    strncpy(display_buf, mnemonic, sizeof(display_buf) - 1);
+    display_buf[sizeof(display_buf) - 1] = '\0';
+  }
+  SECURE_FREE_STRING(mnemonic);
 
-  theme_create_page_title(mnemonic_screen, "BIP39 Words");
+  const char *words[24];
+  size_t word_count = 0;
+  char *p = display_buf;
+  while (*p && word_count < 24) {
+    while (*p == ' ')
+      p++;
+    if (!*p)
+      break;
+    words[word_count++] = p;
+    while (*p && *p != ' ')
+      p++;
+    if (*p)
+      *p++ = '\0';
+  }
 
-  lv_obj_t *content = lv_obj_create(mnemonic_screen);
+  if (toggle_label)
+    lv_label_set_text(toggle_label, display_lang == BIP39_LANG_ZH
+                                        ? "Show in English"
+                                        : "Show in Chinese");
+
+  content_container = lv_obj_create(mnemonic_screen);
+  lv_obj_t *content = content_container;
   lv_obj_set_size(content, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_set_style_pad_all(content, 0, 0);
   lv_obj_set_style_border_width(content, 0, 0);
@@ -128,9 +174,44 @@ void mnemonic_words_page_create(lv_obj_t *parent, void (*return_cb)(void)) {
     add_word_row(col, i, words[i], num_width);
   }
 
-  for (size_t i = 0; i < word_count; i++)
-    SECURE_FREE_STRING(words[i]);
-  free(words);
+  secure_memzero(display_buf, sizeof(display_buf));
+}
+
+void mnemonic_words_page_create(lv_obj_t *parent, void (*return_cb)(void)) {
+  session_cleanup_register(mnemonic_words_page_destroy);
+  if (!parent || !key_is_loaded())
+    return;
+
+  return_callback = return_cb;
+
+  char *mnemonic = NULL;
+  if (!key_get_mnemonic(&mnemonic)) {
+    dialog_show_error_timeout("Not enough internal RAM for mnemonic", return_cb,
+                              0);
+    return;
+  }
+  display_lang = bip39_lang_detect(mnemonic);
+  SECURE_FREE_STRING(mnemonic);
+
+  mnemonic_screen = theme_create_page_container(parent);
+  lv_obj_add_flag(mnemonic_screen, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(mnemonic_screen, back_cb, LV_EVENT_CLICKED, NULL);
+
+  theme_create_page_title(mnemonic_screen, "BIP39 Words");
+
+  toggle_btn = theme_create_button(mnemonic_screen, NULL, false);
+  lv_obj_set_size(toggle_btn, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_style_pad_hor(toggle_btn, theme_small_padding(), 0);
+  lv_obj_set_style_pad_ver(toggle_btn, theme_small_padding() / 2, 0);
+  lv_obj_align(toggle_btn, LV_ALIGN_TOP_RIGHT, -theme_small_padding(),
+              theme_small_padding());
+  lv_obj_add_event_cb(toggle_btn, toggle_lang_cb, LV_EVENT_CLICKED, NULL);
+
+  toggle_label = lv_label_create(toggle_btn);
+  lv_obj_center(toggle_label);
+  theme_apply_button_label(toggle_label, false);
+
+  build_content();
 
   lv_obj_t *hint = theme_create_label(mnemonic_screen, "Tap to return", true);
   lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
@@ -150,8 +231,12 @@ void mnemonic_words_page_hide(void) {
 void mnemonic_words_page_destroy(void) {
   session_cleanup_unregister(mnemonic_words_page_destroy);
   if (mnemonic_screen) {
-    lv_obj_del(mnemonic_screen);
+    lv_obj_del(mnemonic_screen); /* also deletes content_container/toggle_btn */
     mnemonic_screen = NULL;
   }
+  content_container = NULL;
+  toggle_btn = NULL;
+  toggle_label = NULL;
   return_callback = NULL;
+  display_lang = BIP39_LANG_EN;
 }

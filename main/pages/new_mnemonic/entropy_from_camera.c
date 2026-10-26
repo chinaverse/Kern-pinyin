@@ -3,8 +3,10 @@
 #include "entropy_from_camera.h"
 #include "../../ui/dialog.h"
 #include "../../ui/input_helpers.h"
+#include "../../ui/language_selector.h"
 #include "../../ui/theme_widgets.h"
 #include "../../ui/word_selector.h"
+#include "../../utils/bip39_lang.h"
 #include "../../utils/session_cleanup.h"
 #include "../capture_entropy.h"
 #include "kern_wally.h"
@@ -29,13 +31,16 @@ static lv_obj_t *title_label = NULL;
 static void (*return_callback)(void) = NULL;
 static char *completed_mnemonic = NULL;
 
+static bip39_lang_t current_lang = BIP39_LANG_EN;
 static int total_words = 0;
 static uint8_t entropy_hash[32];
 static bool hash_captured = false;
 
+static void create_lang_menu(void);
 static void create_word_count_menu(void);
 static void show_hash_display(void);
 static void cleanup_ui(void);
+static void on_lang_selected(bip39_lang_t lang);
 static void on_word_count_selected(int word_count);
 static void back_cb(void);
 static void return_from_capture_cb(void);
@@ -61,9 +66,19 @@ static void cleanup_ui(void) {
   }
 }
 
+static void create_lang_menu(void) {
+  cleanup_ui();
+  ui_mnemonic_lang_selector_create(entropy_screen, back_cb, on_lang_selected);
+}
+
+static void on_lang_selected(bip39_lang_t lang) {
+  current_lang = lang;
+  create_word_count_menu();
+}
+
 static void create_word_count_menu(void) {
   cleanup_ui();
-  ui_word_count_selector_create(entropy_screen, back_cb,
+  ui_word_count_selector_create(entropy_screen, create_lang_menu,
                                 on_word_count_selected);
 }
 
@@ -144,15 +159,18 @@ static void proceed_cb(lv_event_t *e) {
   size_t entropy_len =
       (total_words == 12) ? ENTROPY_12_WORDS : ENTROPY_24_WORDS;
 
+  const struct words *wl =
+      (current_lang == BIP39_LANG_ZH) ? kern_bip39_zh_wordlist() : NULL;
+
   char *mnemonic = NULL;
-  if (kern_bip39_mnemonic_from_bytes(NULL, entropy_hash, entropy_len,
+  if (kern_bip39_mnemonic_from_bytes(wl, entropy_hash, entropy_len,
                                      &mnemonic) != WALLY_OK ||
       !mnemonic) {
     dialog_show_error_timeout("Failed to generate mnemonic", NULL, 0);
     return;
   }
 
-  if (bip39_mnemonic_validate(NULL, mnemonic) != WALLY_OK) {
+  if (bip39_lang_validate(mnemonic) != WALLY_OK) {
     wally_free_string(mnemonic);
     dialog_show_error_timeout("Invalid mnemonic generated", NULL, 0);
     return;
@@ -187,13 +205,14 @@ void entropy_from_camera_page_create(lv_obj_t *parent,
 
   SECURE_FREE_STRING(completed_mnemonic);
 
+  current_lang = BIP39_LANG_EN;
   total_words = 0;
   hash_captured = false;
   secure_memzero(entropy_hash, sizeof(entropy_hash));
 
   entropy_screen = theme_create_page_container(parent);
 
-  create_word_count_menu();
+  create_lang_menu();
 }
 
 void entropy_from_camera_page_show(void) {
@@ -218,6 +237,7 @@ void entropy_from_camera_page_destroy(void) {
   secure_memzero(entropy_hash, sizeof(entropy_hash));
   hash_captured = false;
   total_words = 0;
+  current_lang = BIP39_LANG_EN;
   return_callback = NULL;
 }
 

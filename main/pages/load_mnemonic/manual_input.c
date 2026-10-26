@@ -4,10 +4,13 @@
 #include "../../ui/dialog.h"
 #include "../../ui/input_helpers.h"
 #include "../../ui/keyboard.h"
+#include "../../ui/language_selector.h"
 #include "../../ui/menu.h"
 #include "../../ui/theme_widgets.h"
 #include "../../ui/word_selector.h"
 #include "../../utils/bip39_filter.h"
+#include "../../utils/bip39_filter_zh.h"
+#include "../../utils/bip39_lang.h"
 #include "../../utils/session_cleanup.h"
 #include "../shared/mnemonic_editor.h"
 #include <lvgl.h>
@@ -17,12 +20,16 @@
 #include "../../utils/secure_mem.h"
 
 typedef enum {
+  MODE_LANG_SELECT,
   MODE_WORD_COUNT_SELECT,
   MODE_KEYBOARD_INPUT,
   MODE_WORD_SELECT
 } input_mode_t;
 
 #define MAX_MNEMONIC_LEN 256
+// Large enough for either wordlist's candidate list at once (Chinese
+// pinyin homophone groups run larger than English prefix matches).
+#define MAX_FILTERED_WORDS BIP39_ZH_MAX_FILTERED_WORDS
 
 static lv_obj_t *manual_input_screen = NULL;
 static lv_obj_t *back_btn = NULL;
@@ -31,25 +38,29 @@ static ui_keyboard_t *keyboard = NULL;
 static void (*return_callback)(void) = NULL;
 static void (*success_callback)(void) = NULL;
 
+static bip39_lang_t current_lang = BIP39_LANG_EN;
 static int total_words = 0;
+static int pending_word_count = 0;
 static int current_word_index = 0;
 static char entered_words[24][16];
 static char current_prefix[BIP39_MAX_PREFIX_LEN + 1];
 static int prefix_len = 0;
 
-static const char *filtered_words[BIP39_MAX_FILTERED_WORDS];
+static const char *filtered_words[MAX_FILTERED_WORDS];
 static int filtered_count = 0;
-static input_mode_t current_mode = MODE_WORD_COUNT_SELECT;
+static input_mode_t current_mode = MODE_LANG_SELECT;
 static char pending_word[16] = {0};
 static bool checksum_filter_mode = false;
 static bool word_count_preselected = false;
 
 static void word_confirmation_cb(bool confirmed, void *user_data);
+static void create_lang_menu(void);
 static void create_word_count_menu(void);
 static void create_keyboard_input(void);
 static void create_word_select_menu(void);
 static void update_keyboard_state(void);
 static void filter_words_by_prefix(void);
+static void on_lang_selected(bip39_lang_t lang);
 static void on_word_count_selected(int word_count);
 static void keyboard_callback(char key);
 static void word_selected_cb(void);
@@ -58,14 +69,27 @@ static void back_cb(void);
 static void finish_mnemonic(void);
 static void cleanup_ui(void);
 
+static bool is_last_word_position(void) {
+  return checksum_filter_mode && current_word_index == total_words - 1;
+}
+
 static void filter_words_by_prefix(void) {
-  if (checksum_filter_mode && current_word_index == total_words - 1) {
-    filtered_count = bip39_filter_last_word_by_prefix(
-        entered_words, total_words, current_prefix, prefix_len, filtered_words,
-        BIP39_MAX_FILTERED_WORDS);
+  if (current_lang == BIP39_LANG_ZH) {
+    filtered_count =
+        is_last_word_position()
+            ? bip39_filter_zh_last_word_by_prefix(
+                  entered_words, total_words, current_prefix, prefix_len,
+                  filtered_words, MAX_FILTERED_WORDS)
+            : bip39_filter_zh_by_prefix(current_prefix, prefix_len,
+                                       filtered_words, MAX_FILTERED_WORDS);
   } else {
-    filtered_count = bip39_filter_by_prefix(
-        current_prefix, prefix_len, filtered_words, BIP39_MAX_FILTERED_WORDS);
+    filtered_count =
+        is_last_word_position()
+            ? bip39_filter_last_word_by_prefix(
+                  entered_words, total_words, current_prefix, prefix_len,
+                  filtered_words, MAX_FILTERED_WORDS)
+            : bip39_filter_by_prefix(current_prefix, prefix_len,
+                                    filtered_words, MAX_FILTERED_WORDS);
   }
 }
 
@@ -112,6 +136,7 @@ static void word_confirmation_cb(bool confirmed, void *user_data) {
       // Clear cache when moving to last word so it gets recalculated
       if (checksum_filter_mode && current_word_index == total_words - 1) {
         bip39_filter_clear_last_word_cache();
+        bip39_filter_zh_clear_last_word_cache();
       }
       create_keyboard_input();
     }
@@ -131,6 +156,13 @@ static void word_confirmation_cb(bool confirmed, void *user_data) {
   }
 }
 
+static void create_lang_menu(void) {
+  cleanup_ui();
+  current_mode = MODE_LANG_SELECT;
+  ui_mnemonic_lang_selector_create(manual_input_screen, back_cb,
+                                   on_lang_selected);
+}
+
 static void create_word_count_menu(void) {
   cleanup_ui();
   current_mode = MODE_WORD_COUNT_SELECT;
@@ -143,8 +175,7 @@ static void update_keyboard_state(void) {
     return;
 
   char title[48];
-  bool is_last_word =
-      checksum_filter_mode && current_word_index == total_words - 1;
+  bool is_last_word = is_last_word_position();
   if (is_last_word) {
     snprintf(title, sizeof(title), "Word %d/%d (checksum)",
              current_word_index + 1, total_words);
@@ -158,10 +189,17 @@ static void update_keyboard_state(void) {
   uint32_t valid_letters;
   int match_count;
   if (is_last_word) {
-    valid_letters = bip39_filter_get_valid_letters_for_last_word(
-        entered_words, total_words, current_prefix, prefix_len);
+    valid_letters =
+        (current_lang == BIP39_LANG_ZH)
+            ? bip39_filter_zh_get_valid_letters_for_last_word(
+                  entered_words, total_words, current_prefix, prefix_len)
+            : bip39_filter_get_valid_letters_for_last_word(
+                  entered_words, total_words, current_prefix, prefix_len);
     filter_words_by_prefix();
     match_count = filtered_count;
+  } else if (current_lang == BIP39_LANG_ZH) {
+    valid_letters = bip39_filter_zh_get_valid_letters(current_prefix, prefix_len);
+    match_count = bip39_filter_zh_count_matches(current_prefix, prefix_len);
   } else {
     valid_letters = bip39_filter_get_valid_letters(current_prefix, prefix_len);
     match_count = bip39_filter_count_matches(current_prefix, prefix_len);
@@ -172,7 +210,7 @@ static void update_keyboard_state(void) {
                               prefix_len > 0 || current_word_index > 0);
   ui_keyboard_set_ok_enabled(keyboard,
                              prefix_len > 0 && match_count > 0 &&
-                                 match_count <= BIP39_MAX_FILTERED_WORDS);
+                                 match_count <= MAX_FILTERED_WORDS);
 }
 
 static void back_confirm_cb(bool confirmed, void *user_data) {
@@ -230,6 +268,15 @@ static void create_word_select_menu(void) {
   ui_menu_show(current_menu);
 }
 
+static void on_lang_selected(bip39_lang_t lang) {
+  current_lang = lang;
+  if (word_count_preselected) {
+    on_word_count_selected(pending_word_count);
+  } else {
+    create_word_count_menu();
+  }
+}
+
 static void on_word_count_selected(int word_count) {
   total_words = word_count;
   current_word_index = 0;
@@ -237,6 +284,26 @@ static void on_word_count_selected(int word_count) {
   current_prefix[0] = '\0';
   secure_memzero(entered_words, sizeof(entered_words));
   create_keyboard_input();
+}
+
+// Step back into the previous word to re-enter it. For English, the word
+// itself is spelled with the same alphabet as the prefix, so we can drop
+// the last letter and resume typing from there. For Chinese, only the
+// selected hanzi is kept -- not the pinyin that produced it -- so re-
+// editing a previous word restarts its pinyin from scratch instead.
+static void step_back_into_previous_word(void) {
+  current_word_index--;
+  if (current_lang == BIP39_LANG_ZH) {
+    current_prefix[0] = '\0';
+    prefix_len = 0;
+  } else {
+    strncpy(current_prefix, entered_words[current_word_index],
+            BIP39_MAX_PREFIX_LEN);
+    current_prefix[BIP39_MAX_PREFIX_LEN] = '\0';
+    prefix_len = strlen(current_prefix);
+  }
+  entered_words[current_word_index][0] = '\0';
+  update_keyboard_state();
 }
 
 static void keyboard_callback(char key) {
@@ -258,13 +325,7 @@ static void keyboard_callback(char key) {
       current_prefix[prefix_len] = '\0';
       update_keyboard_state();
     } else if (current_word_index > 0) {
-      current_word_index--;
-      strncpy(current_prefix, entered_words[current_word_index],
-              BIP39_MAX_PREFIX_LEN);
-      current_prefix[BIP39_MAX_PREFIX_LEN] = '\0';
-      prefix_len = strlen(current_prefix);
-      entered_words[current_word_index][0] = '\0';
-      update_keyboard_state();
+      step_back_into_previous_word();
     }
   } else if (key == UI_KB_OK) {
     filter_words_by_prefix();
@@ -291,9 +352,13 @@ static void back_to_keyboard_cb(void) { create_keyboard_input(); }
 
 static void back_cb(void) {
   switch (current_mode) {
-  case MODE_WORD_COUNT_SELECT:
+  case MODE_LANG_SELECT:
     if (return_callback)
       return_callback();
+    break;
+
+  case MODE_WORD_COUNT_SELECT:
+    create_lang_menu();
     break;
 
   case MODE_KEYBOARD_INPUT:
@@ -302,17 +367,10 @@ static void back_cb(void) {
       current_prefix[0] = '\0';
       update_keyboard_state();
     } else if (current_word_index > 0) {
-      current_word_index--;
-      strncpy(current_prefix, entered_words[current_word_index],
-              BIP39_MAX_PREFIX_LEN);
-      current_prefix[BIP39_MAX_PREFIX_LEN] = '\0';
-      prefix_len = strlen(current_prefix);
-      entered_words[current_word_index][0] = '\0';
-      update_keyboard_state();
+      step_back_into_previous_word();
     } else {
       if (word_count_preselected) {
-        if (return_callback)
-          return_callback();
+        create_lang_menu();
       } else {
         create_word_count_menu();
       }
@@ -352,11 +410,12 @@ static bool create_page(lv_obj_t *parent, void (*return_cb)(void),
   success_callback = success_cb;
   checksum_filter_mode = checksum_filter_last_word;
 
-  if (!bip39_filter_init()) {
+  if (!bip39_filter_init() || !bip39_filter_zh_init()) {
     dialog_show_error_timeout("Failed to load wordlist", return_cb, 0);
     return false;
   }
 
+  current_lang = BIP39_LANG_EN;
   total_words = 0;
   current_word_index = 0;
   prefix_len = 0;
@@ -364,6 +423,7 @@ static bool create_page(lv_obj_t *parent, void (*return_cb)(void),
   filtered_count = 0;
   secure_memzero(entered_words, sizeof(entered_words));
   bip39_filter_clear_last_word_cache();
+  bip39_filter_zh_clear_last_word_cache();
 
   manual_input_screen = theme_create_page_container(parent);
   return manual_input_screen != NULL;
@@ -377,7 +437,7 @@ void manual_input_page_create(lv_obj_t *parent, void (*return_cb)(void),
   if (!create_page(parent, return_cb, success_cb, checksum_filter_last_word))
     return;
 
-  create_word_count_menu();
+  create_lang_menu();
 }
 
 void manual_input_page_create_with_word_count(lv_obj_t *parent,
@@ -390,10 +450,11 @@ void manual_input_page_create_with_word_count(lv_obj_t *parent,
     return;
 
   word_count_preselected = true;
+  pending_word_count = word_count;
   if (!create_page(parent, return_cb, success_cb, checksum_filter_last_word))
     return;
 
-  on_word_count_selected(word_count);
+  create_lang_menu();
 }
 
 void manual_input_page_show(void) {
@@ -430,12 +491,15 @@ void manual_input_page_destroy(void) {
 
   return_callback = NULL;
   success_callback = NULL;
+  current_lang = BIP39_LANG_EN;
   total_words = 0;
+  pending_word_count = 0;
   current_word_index = 0;
   prefix_len = 0;
   filtered_count = 0;
-  current_mode = MODE_WORD_COUNT_SELECT;
+  current_mode = MODE_LANG_SELECT;
   checksum_filter_mode = false;
   word_count_preselected = false;
   bip39_filter_clear_last_word_cache();
+  bip39_filter_zh_clear_last_word_cache();
 }

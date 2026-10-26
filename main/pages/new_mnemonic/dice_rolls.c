@@ -3,8 +3,10 @@
 #include "dice_rolls.h"
 #include "../../ui/dialog.h"
 #include "../../ui/input_helpers.h"
+#include "../../ui/language_selector.h"
 #include "../../ui/theme_widgets.h"
 #include "../../ui/word_selector.h"
+#include "../../utils/bip39_lang.h"
 #include "../../utils/dice_quality.h"
 #include "../../utils/session_cleanup.h"
 #include "kern_wally.h"
@@ -36,14 +38,17 @@ static lv_obj_t *rolls_label = NULL;
 static void (*return_callback)(void) = NULL;
 static char *completed_mnemonic = NULL;
 
+static bip39_lang_t current_lang = BIP39_LANG_EN;
 static int total_words = 0;
 static int min_rolls = 0;
 static char rolls_string[MAX_ROLLS + 1];
 static int rolls_count = 0;
 
+static void create_lang_menu(void);
 static void create_word_count_menu(void);
 static void create_dice_input(void);
 static void cleanup_ui(void);
+static void on_lang_selected(bip39_lang_t lang);
 static void on_word_count_selected(int word_count);
 static void back_cb(void);
 static void dice_btnmatrix_event_cb(lv_event_t *e);
@@ -81,9 +86,20 @@ static void cleanup_ui(void) {
   }
 }
 
+static void create_lang_menu(void) {
+  cleanup_ui();
+  ui_mnemonic_lang_selector_create(dice_rolls_screen, back_cb,
+                                   on_lang_selected);
+}
+
+static void on_lang_selected(bip39_lang_t lang) {
+  current_lang = lang;
+  create_word_count_menu();
+}
+
 static void create_word_count_menu(void) {
   cleanup_ui();
-  ui_word_count_selector_create(dice_rolls_screen, back_cb,
+  ui_word_count_selector_create(dice_rolls_screen, create_lang_menu,
                                 on_word_count_selected);
 }
 
@@ -289,14 +305,16 @@ static bool generate_mnemonic_from_rolls(void) {
                    sizeof(hash)) != WALLY_OK)
     return false;
 
+  const struct words *wl =
+      (current_lang == BIP39_LANG_ZH) ? kern_bip39_zh_wordlist() : NULL;
+
   char *mnemonic = NULL;
-  int result =
-      kern_bip39_mnemonic_from_bytes(NULL, hash, entropy_len, &mnemonic);
+  int result = kern_bip39_mnemonic_from_bytes(wl, hash, entropy_len, &mnemonic);
   secure_memzero(hash, sizeof(hash));
   if (result != WALLY_OK || !mnemonic)
     return false;
 
-  if (bip39_mnemonic_validate(NULL, mnemonic) != WALLY_OK) {
+  if (bip39_lang_validate(mnemonic) != WALLY_OK) {
     wally_free_string(mnemonic);
     return false;
   }
@@ -347,6 +365,7 @@ void dice_rolls_page_create(lv_obj_t *parent, void (*return_cb)(void)) {
 
   SECURE_FREE_STRING(completed_mnemonic);
 
+  current_lang = BIP39_LANG_EN;
   total_words = 0;
   min_rolls = 0;
   rolls_count = 0;
@@ -354,7 +373,7 @@ void dice_rolls_page_create(lv_obj_t *parent, void (*return_cb)(void)) {
 
   dice_rolls_screen = theme_create_page_container(parent);
 
-  create_word_count_menu();
+  create_lang_menu();
 }
 
 void dice_rolls_page_show(void) {
@@ -380,6 +399,7 @@ void dice_rolls_page_destroy(void) {
   rolls_count = 0;
   total_words = 0;
   min_rolls = 0;
+  current_lang = BIP39_LANG_EN;
   return_callback = NULL;
 }
 

@@ -6,6 +6,11 @@
 // Mutable font copies with icon fallbacks
 static lv_font_t font_small;
 static lv_font_t font_medium;
+// Mutable copies of the nearest-size baked BIP39-Chinese font, re-pointed
+// to this board's actual icon font below (the baked copy's own .fallback
+// is fixed at a possibly-different size -- see bake_bip39_zh_font.py).
+static lv_font_t zh_small;
+static lv_font_t zh_medium;
 
 // Cached screen dimensions and derived sizes (set once in theme_init)
 static int32_t scr_w;
@@ -33,6 +38,13 @@ typedef struct {
 // tools/bake_icons.py SIZES list. Retune fonts via tools/derive_font_sizes.py,
 // never here.
 #include "assets/icons_fonts.h"
+// BIP39 Chinese wordlist subset font (see tools/bake_bip39_zh_font.py).
+// Only baked at a couple of sizes (see that script's SIZES override where
+// it's invoked), so bip39_zh_font_for_size() below returns the nearest
+// one; theme_init() re-points its mutable copy's own .fallback at this
+// board's actual icon font, since the baked copy's is fixed to whichever
+// (possibly different) size it was generated at.
+#include "assets/bip39_zh_fonts.h"
 
 void theme_init(void) {
   scr_w = lv_disp_get_hor_res(NULL);
@@ -61,11 +73,15 @@ void theme_init(void) {
   theme_font_pair_t small = font_pair_for_size(policy.small_px);
   theme_font_pair_t medium = font_pair_for_size(policy.medium_px);
 
+  zh_small = *bip39_zh_font_for_size(policy.small_px);
+  zh_small.fallback = small.icon;
   font_small = *small.text;
-  font_small.fallback = small.icon;
+  font_small.fallback = &zh_small;
 
+  zh_medium = *bip39_zh_font_for_size(policy.medium_px);
+  zh_medium.fallback = medium.icon;
   font_medium = *medium.text;
-  font_medium.fallback = medium.icon;
+  font_medium.fallback = &zh_medium;
 
   theme_widgets_init();
 }

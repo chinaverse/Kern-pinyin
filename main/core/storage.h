@@ -36,6 +36,7 @@ typedef enum {
 #define STORAGE_MAX_SANITIZED_ID_LEN 24
 #define STORAGE_MNEMONIC_PREFIX "m_"
 #define STORAGE_MNEMONIC_EXT ".kef"
+#define STORAGE_MNEMONIC_LANG_EXT ".lang"
 #define STORAGE_DESCRIPTOR_PREFIX "d_"
 #define STORAGE_DESCRIPTOR_EXT_KEF ".kef"
 #define STORAGE_DESCRIPTOR_EXT_TXT ".txt"
@@ -99,6 +100,38 @@ KERN_WARN_UNUSED_RESULT esp_err_t storage_wipe_flash(void);
  */
 KERN_WARN_UNUSED_RESULT bool storage_mnemonic_exists(storage_location_t loc,
                                                      const char *id);
+
+/**
+ * Build the filename a mnemonic with the given ID would be saved under
+ * (e.g. "m_MySeed.kef" on flash, "MySeed.kef" on SD), matching
+ * storage_save_mnemonic's convention. No filesystem access.
+ */
+void storage_mnemonic_filename(storage_location_t loc, const char *id,
+                               char *out, size_t out_size);
+
+/**
+ * Mark a stored mnemonic as having been entered/displayed in the Chinese
+ * BIP39 wordlist, so it can be redisplayed in Chinese after being
+ * reloaded. This is purely a Kern-local display hint, stored as a tiny
+ * sidecar file next to the KEF envelope (same id, ".lang" extension) --
+ * it never reads or modifies the KEF envelope's own contents or header.
+ * Its absence means English, which is also correct for every mnemonic
+ * saved before this existed, so no migration is needed.
+ *
+ * @param kef_filename The mnemonic's .kef filename, as returned by
+ *                      storage_mnemonic_filename() or
+ *                      storage_list_mnemonics().
+ */
+KERN_WARN_UNUSED_RESULT esp_err_t
+storage_mark_mnemonic_chinese(storage_location_t loc,
+                              const char *kef_filename);
+
+/**
+ * @return true if storage_mark_mnemonic_chinese() was called for this
+ *         mnemonic file (and not since removed by deleting the mnemonic).
+ */
+KERN_WARN_UNUSED_RESULT bool
+storage_mnemonic_is_chinese(storage_location_t loc, const char *kef_filename);
 
 /**
  * Sanitize a raw ID for use as a filename component.

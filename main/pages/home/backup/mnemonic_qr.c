@@ -7,6 +7,7 @@
 #include "../../../ui/dialog.h"
 #include "../../../ui/input_helpers.h"
 #include "../../../ui/theme_widgets.h"
+#include "../../../utils/bip39_lang.h"
 #include "../../../utils/session_cleanup.h"
 #include "../../shared/kef_encrypt_page.h"
 #include <lvgl.h>
@@ -54,6 +55,8 @@ static lv_obj_t *mnemonic_qr_screen = NULL;
 static lv_obj_t *back_button = NULL;
 static lv_obj_t *qr_type_dropdown = NULL;
 static lv_obj_t *view_dropdown = NULL;
+static lv_obj_t *lang_toggle_btn = NULL;
+static lv_obj_t *lang_toggle_label = NULL;
 static lv_obj_t *qr_code = NULL;
 static lv_obj_t *qr_container = NULL;
 static lv_obj_t *grid_overlay = NULL;
@@ -63,6 +66,11 @@ static lv_obj_t **col_labels = NULL;
 static lv_obj_t **row_labels = NULL;
 static void (*return_callback)(void) = NULL;
 static char *mnemonic_data = NULL;
+/* Translated view of mnemonic_data for the Plaintext QR only -- see
+ * rebuild_display_mnemonic(). SeedQR/CompactSeedQR/Encrypted stay
+ * entropy-based and untranslated regardless of this. */
+static bip39_lang_t qr_display_lang = BIP39_LANG_EN;
+static char *mnemonic_display_data = NULL;
 static char *seedqr_data = NULL;
 static unsigned char *compact_seedqr_data = NULL;
 static size_t compact_seedqr_len = 0;
@@ -111,6 +119,53 @@ static void back_cb(lv_event_t *e) {
   (void)e;
   if (return_callback)
     return_callback();
+}
+
+/* Rebuilds mnemonic_display_data from mnemonic_data in qr_display_lang.
+ * Never touches mnemonic_data itself, so SeedQR/CompactSeedQR (derived from
+ * mnemonic_data directly, once, in mnemonic_qr_page_create) are unaffected
+ * by this display-only toggle. */
+static void rebuild_display_mnemonic(void) {
+  SECURE_FREE_STRING(mnemonic_display_data);
+  if (!mnemonic_data)
+    return;
+
+  char *buf = kern_secret_alloc(BIP39_LANG_MAX_MNEMONIC_LEN);
+  if (!buf)
+    return;
+
+  if (!bip39_lang_translate_to(mnemonic_data, qr_display_lang, buf,
+                               BIP39_LANG_MAX_MNEMONIC_LEN)) {
+    /* Shouldn't fail for a mnemonic that already loaded successfully;
+     * fall back to the original rather than showing nothing. */
+    SECURE_FREE_BUFFER(buf, BIP39_LANG_MAX_MNEMONIC_LEN);
+    return;
+  }
+  mnemonic_display_data = buf;
+}
+
+/* The text actually fed to the Plaintext QR encoder: the translated view
+ * once it exists, else the original (e.g. translation not attempted yet,
+ * or it failed). */
+static const char *plaintext_qr_data(void) {
+  return mnemonic_display_data ? mnemonic_display_data : mnemonic_data;
+}
+
+static void lang_toggle_cb(lv_event_t *e) {
+  (void)e;
+  qr_display_lang =
+      (qr_display_lang == BIP39_LANG_ZH) ? BIP39_LANG_EN : BIP39_LANG_ZH;
+  rebuild_display_mnemonic();
+  /* Label always shows the language a tap would switch *to*. */
+  if (lang_toggle_label)
+    lv_label_set_text(lang_toggle_label,
+                      qr_display_lang == BIP39_LANG_ZH ? "EN" : "ZH");
+  if (current_qr_type == QR_TYPE_PLAINTEXT) {
+    /* Underlying bytes changed: the zoom cache must re-encode. */
+    zoom_buf_type = (qr_type_t)-1;
+    shade_region_index = 0;
+    update_qr_code();
+  }
 }
 
 static void destroy_grid_overlay(void) {
@@ -546,7 +601,7 @@ static int ensure_zoom_encoded(void) {
     if (encrypted_qr_data)
       modules = qr_encode_optimal(encrypted_qr_data, zoom_qr_buf);
   } else {
-    const char *data = (current_qr_type == QR_TYPE_PLAINTEXT) ? mnemonic_data
+    const char *data = (current_qr_type == QR_TYPE_PLAINTEXT) ? plaintext_qr_data()
                        : (current_qr_type == QR_TYPE_SEEDQR)  ? seedqr_data
                                                               : NULL;
     if (data)
@@ -796,7 +851,7 @@ static void update_qr_code(void) {
     if (encrypted_qr_data)
       qr_update_optimal(qr_code, encrypted_qr_data, &last_qr_result);
   } else {
-    const char *data = (current_qr_type == QR_TYPE_PLAINTEXT) ? mnemonic_data
+    const char *data = (current_qr_type == QR_TYPE_PLAINTEXT) ? plaintext_qr_data()
                        : (current_qr_type == QR_TYPE_SEEDQR)  ? seedqr_data
                                                               : NULL;
     if (data)
@@ -821,6 +876,12 @@ static void dropdown_cb(lv_event_t *e) {
   if (new_type != current_qr_type) {
     current_qr_type = new_type;
     shade_region_index = 0; /* region cursor invalid for the new QR */
+    if (lang_toggle_btn) {
+      if (new_type == QR_TYPE_PLAINTEXT)
+        lv_obj_clear_flag(lang_toggle_btn, LV_OBJ_FLAG_HIDDEN);
+      else
+        lv_obj_add_flag(lang_toggle_btn, LV_OBJ_FLAG_HIDDEN);
+    }
     update_qr_code();
   }
 }
@@ -838,6 +899,9 @@ void mnemonic_qr_page_create(lv_obj_t *parent, void (*return_cb)(void)) {
     return;
   }
 
+  qr_display_lang = bip39_lang_detect(mnemonic_data);
+  rebuild_display_mnemonic();
+
   seedqr_data = mnemonic_to_seedqr(mnemonic_data);
   compact_seedqr_data =
       mnemonic_to_compact_seedqr(mnemonic_data, &compact_seedqr_len);
@@ -845,6 +909,7 @@ void mnemonic_qr_page_create(lv_obj_t *parent, void (*return_cb)(void)) {
     secure_memzero(mnemonic_data, strlen(mnemonic_data));
     wally_free_string(mnemonic_data);
     mnemonic_data = NULL;
+    SECURE_FREE_STRING(mnemonic_display_data);
     SECURE_FREE_STRING(seedqr_data);
     SECURE_FREE_BUFFER(compact_seedqr_data, compact_seedqr_len);
     compact_seedqr_len = 0;
@@ -893,6 +958,25 @@ void mnemonic_qr_page_create(lv_obj_t *parent, void (*return_cb)(void)) {
   lv_obj_clear_flag(top_bar, LV_OBJ_FLAG_SCROLLABLE);
 
   back_button = ui_create_back_button(parent, back_cb);
+
+  // Overlaid on `parent`, like back_button, so it doesn't perturb top_bar's
+  // (or content_area's) carefully-tuned flex sizing that the QR grid/zoom
+  // math depends on. Opposite corner from back_button.
+  lang_toggle_btn = theme_create_button(parent, NULL, false);
+  lv_obj_set_size(lang_toggle_btn, theme_corner_button_width(),
+                  theme_corner_button_height());
+  lv_obj_align(lang_toggle_btn, LV_ALIGN_TOP_RIGHT, -theme_small_padding(),
+              theme_small_padding());
+  lv_obj_add_event_cb(lang_toggle_btn, lang_toggle_cb, LV_EVENT_CLICKED, NULL);
+  if (current_qr_type != QR_TYPE_PLAINTEXT)
+    lv_obj_add_flag(lang_toggle_btn, LV_OBJ_FLAG_HIDDEN);
+
+  lang_toggle_label = lv_label_create(lang_toggle_btn);
+  lv_label_set_text(lang_toggle_label,
+                    qr_display_lang == BIP39_LANG_ZH ? "EN" : "ZH");
+  lv_obj_set_style_text_color(lang_toggle_label, highlight_color(), 0);
+  lv_obj_set_style_text_font(lang_toggle_label, theme_font_medium(), 0);
+  lv_obj_center(lang_toggle_label);
 
   qr_type_dropdown = theme_create_dropdown(
       top_bar, "Plaintext\nSeedQR\nCompact SeedQR\nEncrypted");
@@ -974,6 +1058,8 @@ void mnemonic_qr_page_destroy(void) {
     wally_free_string(mnemonic_data);
     mnemonic_data = NULL;
   }
+  SECURE_FREE_STRING(mnemonic_display_data);
+  qr_display_lang = BIP39_LANG_EN;
 
   SECURE_FREE_STRING(seedqr_data);
   SECURE_FREE_BUFFER(compact_seedqr_data, compact_seedqr_len);
@@ -983,6 +1069,11 @@ void mnemonic_qr_page_destroy(void) {
   if (back_button) {
     lv_obj_del(back_button);
     back_button = NULL;
+  }
+  if (lang_toggle_btn) {
+    lv_obj_del(lang_toggle_btn); /* also deletes lang_toggle_label */
+    lang_toggle_btn = NULL;
+    lang_toggle_label = NULL;
   }
 
   if (mnemonic_qr_screen) {

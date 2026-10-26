@@ -184,7 +184,8 @@ static void load_btn_cb(lv_event_t *e) {
   bip85_page_hide();
   key_confirmation_page_create(
       lv_screen_active(), return_from_key_confirmation_cb,
-      success_from_key_confirmation_cb, child_mnemonic, strlen(child_mnemonic));
+      success_from_key_confirmation_cb, child_mnemonic,
+      strlen(child_mnemonic), false);
   key_confirmation_page_show();
 }
 

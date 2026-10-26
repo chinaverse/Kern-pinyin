@@ -6,7 +6,9 @@
 #include "../../core/wallet.h"
 #include "../../qr/encoder.h"
 #include "../../ui/dialog.h"
+#include "../../ui/language_selector.h"
 #include "../../ui/theme.h"
+#include "../../utils/bip39_lang.h"
 #include "../../utils/secure_mem.h"
 #include "../shared/address_checker.h"
 #include "../shared/descriptor_loader.h"
@@ -103,29 +105,23 @@ static void mnemonic_confirm_cb(bool confirmed, void *user_data) {
     scan_ctx.return_cb();
 }
 
-void scan_handle_mnemonic(const char *data, size_t len) {
-  char *mnemonic = mnemonic_qr_to_mnemonic(data, len, NULL);
-  if (!mnemonic || bip39_mnemonic_validate(NULL, mnemonic) != WALLY_OK) {
-    SECURE_FREE_STRING(mnemonic);
-    dialog_show_error_timeout("Invalid mnemonic", scan_ctx.return_cb, 0);
-    return;
-  }
+/* Fingerprint + "Replace current key?" confirmation, run once the mnemonic
+ * (now stashed in scan_ctx.scanned_mnemonic) is in its final display
+ * language. */
+static void show_replace_key_confirm(void) {
+  char *mnemonic = scan_ctx.scanned_mnemonic;
 
-  // Get current fingerprint
   char current_fp[9];
   if (!key_get_fingerprint_hex(current_fp))
     strcpy(current_fp, "????????");
 
   char new_fp[9];
   if (!key_mnemonic_fingerprint_hex(mnemonic, new_fp)) {
-    SECURE_FREE_STRING(mnemonic);
+    SECURE_FREE_STRING(scan_ctx.scanned_mnemonic);
     dialog_show_error_timeout("Failed to process mnemonic", scan_ctx.return_cb,
                               0);
     return;
   }
-
-  // Store mnemonic for confirmation callback
-  scan_ctx.scanned_mnemonic = mnemonic;
 
   char msg[256];
   snprintf(
@@ -140,4 +136,39 @@ void scan_handle_mnemonic(const char *data, size_t len) {
       new_fp);
 
   dialog_show_confirm(msg, mnemonic_confirm_cb, NULL, DIALOG_STYLE_FULLSCREEN);
+}
+
+static void scan_mnemonic_lang_back_cb(void) {
+  SECURE_FREE_STRING(scan_ctx.scanned_mnemonic);
+  if (scan_ctx.return_cb)
+    scan_ctx.return_cb();
+}
+
+static void scan_mnemonic_lang_chosen_cb(bip39_lang_t lang) {
+  char translated[BIP39_LANG_MAX_MNEMONIC_LEN];
+  if (bip39_lang_translate_to(scan_ctx.scanned_mnemonic, lang, translated,
+                              sizeof(translated))) {
+    char *new_mnemonic = kern_secret_strdup(translated);
+    secure_memzero(translated, sizeof(translated));
+    if (new_mnemonic) {
+      SECURE_FREE_STRING(scan_ctx.scanned_mnemonic);
+      scan_ctx.scanned_mnemonic = new_mnemonic;
+    }
+  }
+  show_replace_key_confirm();
+}
+
+void scan_handle_mnemonic(const char *data, size_t len) {
+  char *mnemonic = mnemonic_qr_to_mnemonic(data, len, NULL);
+  if (!mnemonic || bip39_lang_validate(mnemonic) != WALLY_OK) {
+    SECURE_FREE_STRING(mnemonic);
+    dialog_show_error_timeout("Invalid mnemonic", scan_ctx.return_cb, 0);
+    return;
+  }
+
+  // Store mnemonic for the language choice and confirmation callbacks
+  scan_ctx.scanned_mnemonic = mnemonic;
+
+  ui_mnemonic_lang_selector_create(lv_screen_active(), scan_mnemonic_lang_back_cb,
+                                   scan_mnemonic_lang_chosen_cb);
 }

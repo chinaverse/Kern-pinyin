@@ -81,3 +81,6 @@ CLAUDE.md
 # Secret-allocation host test objects
 main/core/test/kern_wally.o
 main/core/test/secret_alloc.o
+
+# Local firmware release builds (published as GitHub release assets)
+dist/

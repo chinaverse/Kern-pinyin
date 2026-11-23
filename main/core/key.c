@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <wally_bip39.h>
+#include <wally_bip85.h>
 #include <wally_core.h>
 #include <wally_crypto.h>
 
@@ -16,8 +17,6 @@ static struct ext_key *master_key = NULL;
 static unsigned char fingerprint[BIP32_KEY_FINGERPRINT_LEN];
 static char *stored_mnemonic = NULL;
 static bool key_loaded = false;
-
-#define KEY_MAX_DERIVATION_DEPTH 10
 
 static void fingerprint_to_hex(const unsigned char *fp, char *hex_out) {
   for (int i = 0; i < BIP32_KEY_FINGERPRINT_LEN; i++) {
@@ -320,4 +319,43 @@ bool key_get_derived_key_components(const uint32_t *path, size_t path_depth,
   int ret = kern_bip32_key_from_parent_path_alloc(
       master_key, path, path_depth, BIP32_FLAG_KEY_PRIVATE, key_out);
   return (ret == WALLY_OK);
+}
+
+bool key_get_public_key_components(const uint32_t *path, size_t path_depth,
+                                   struct ext_key **key_out) {
+  if (!key_get_derived_key_components(path, path_depth, key_out))
+    return false;
+  if (bip32_key_strip_private_key(*key_out) != WALLY_OK) {
+    bip32_key_free(*key_out);
+    *key_out = NULL;
+    return false;
+  }
+  return true;
+}
+
+bool key_bip85_mnemonic(const struct ext_key *master, uint32_t num_words,
+                        uint32_t index, char **mnemonic_out) {
+  if (mnemonic_out)
+    *mnemonic_out = NULL;
+  if (!master || !mnemonic_out)
+    return false;
+
+  unsigned char entropy[HMAC_SHA512_LEN];
+  size_t written = 0;
+  bool ok = bip85_get_bip39_entropy(master, NULL, num_words, index, entropy,
+                                    sizeof(entropy), &written) == WALLY_OK &&
+            kern_bip39_mnemonic_from_bytes(NULL, entropy, written,
+                                           mnemonic_out) == WALLY_OK &&
+            *mnemonic_out;
+  secure_memzero(entropy, sizeof(entropy));
+  return ok;
+}
+
+bool key_get_bip85_mnemonic(uint32_t num_words, uint32_t index,
+                            char **mnemonic_out) {
+  if (mnemonic_out)
+    *mnemonic_out = NULL;
+  if (!key_loaded || !master_key)
+    return false;
+  return key_bip85_mnemonic(master_key, num_words, index, mnemonic_out);
 }

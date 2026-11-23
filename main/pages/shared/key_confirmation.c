@@ -1,6 +1,7 @@
 #include "key_confirmation.h"
 #include "../../core/key.h"
 #include "../../core/registry.h"
+#include "../../core/secp_hardening.h"
 #include "../../core/settings.h"
 #include "../../core/wallet.h"
 #include "../../qr/encoder.h"
@@ -13,6 +14,7 @@
 #include "../../utils/memory_utils.h"
 #include "../../utils/secure_mem.h"
 #include "../../utils/session_cleanup.h"
+#include "descriptor_loader.h"
 #include <lvgl.h>
 #include <string.h>
 
@@ -36,9 +38,11 @@ static void loading_timer_cb(lv_timer_t *timer) {
                                 0);
       return;
     }
+    secp_blind_refresh();
     registry_init(net == WALLET_NETWORK_TESTNET);
     if (success_callback)
       success_callback();
+    descriptor_loader_show_rejected_notice();
   } else {
     dialog_show_error_timeout("Failed to load key", return_callback, 0);
   }

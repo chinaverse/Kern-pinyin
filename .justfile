@@ -32,6 +32,73 @@ flash board="wave_4b": (_check_board board)
     command -v idf.py >/dev/null || . $IDF_PATH/export.sh
     idf.py -B build_{{board}} -D SDKCONFIG=build_{{board}}/sdkconfig -D "SDKCONFIG_DEFAULTS=$(just _defaults {{board}})" flash
 
+# The sdkconfig is regenerated every time so overlay edits always land.
+# Release log and panic settings (sdkconfig.release overlay) with a plain bootloader, in build_release_<board>/.
+# scripts/release.sh builds with build-secure.
+build-release board="wave_4b": (_check_board board)
+    #!/usr/bin/env sh
+    set -e
+    command -v idf.py >/dev/null || . $IDF_PATH/export.sh
+    rm -f build_release_{{board}}/sdkconfig
+    idf.py -B build_release_{{board}} -D SDKCONFIG=build_release_{{board}}/sdkconfig -D "SDKCONFIG_DEFAULTS=$(just _defaults {{board}});sdkconfig.release" build
+
+flash-release board="wave_4b": (build-release board)
+    #!/usr/bin/env sh
+    command -v idf.py >/dev/null || . $IDF_PATH/export.sh
+    idf.py -B build_release_{{board}} -D SDKCONFIG=build_release_{{board}}/sdkconfig flash
+
+# Lockable release image (sdkconfig.release + sdkconfig.secure, published key digests) in build_secure_<board>/.
+# The build signs with dev_signing_key.pem; the files to sign with the release keys are
+# kern-unsigned.bin (key 0) and bootloader/bootloader-unsigned.bin (keys 0, 1 and 2).
+build-secure board="wave_4b" target="build": (_check_board board)
+    #!/usr/bin/env sh
+    set -e
+    command -v idf.py >/dev/null || . $IDF_PATH/export.sh
+    rm -f build_secure_{{board}}/sdkconfig
+    idf.py -B build_secure_{{board}} -D SDKCONFIG=build_secure_{{board}}/sdkconfig -D "SDKCONFIG_DEFAULTS=$(just _defaults {{board}});sdkconfig.release;sdkconfig.secure" {{target}}
+
+# Build every board's secure bootloader and stage one unsigned image per variant in release/bootloader-<N>/
+# for scripts/freeze_bootloader.sh, which signs them with the three release keys on the air-gapped PC.
+bootloader-stage:
+    ./scripts/bootloader_stage.sh
+
+# Verify a signed release/bootloader-<N>/ folder and copy it into kern_secure_boot/bootloaders/
+bootloader-import dir:
+    ./scripts/bootloader_import.sh {{dir}}
+
+# Secure boot dry run: a sdkconfig.secure build with virtual eFuses (sdkconfig.sbtest), so the
+# Settings lockdown burns a RAM copy that is gone after the restart. Signed with test keys:
+# dev_signing_key.pem signs the app, it and two throwaway keys sign the bootloader, and their
+# digests replace the release ones. Run on a board that already has a PIN.
+sbtest-build board="wave_4b": (_check_board board)
+    #!/usr/bin/env sh
+    set -e
+    command -v idf.py >/dev/null || . $IDF_PATH/export.sh
+    dir=build_sbtest_{{board}}
+    mkdir -p $dir/keys $dir/digests
+    [ -f dev_signing_key.pem ] || python -m espsecure generate-signing-key --version 2 --scheme rsa3072 dev_signing_key.pem
+    cp dev_signing_key.pem $dir/keys/key0.pem
+    for n in 1 2; do
+        [ -f $dir/keys/key$n.pem ] || python -m espsecure generate-signing-key --version 2 --scheme rsa3072 $dir/keys/key$n.pem
+    done
+    for n in 0 1 2; do
+        python -m espsecure digest-sbv2-public-key --keyfile $dir/keys/key$n.pem -o $dir/digests/kern-sb-digest$n.bin
+    done
+    rm -f $dir/sdkconfig
+    idf.py -B $dir -D SDKCONFIG=$dir/sdkconfig -D "SDKCONFIG_DEFAULTS=$(just _defaults {{board}});sdkconfig.secure;sdkconfig.sbtest" -D KERN_SB_DIGEST_DIR=$PWD/$dir/digests build
+    python -m espsecure sign-data --version 2 --keyfile $dir/keys/key1.pem --append-signatures -o $dir/bootloader-2sig.bin $dir/bootloader/bootloader.bin
+    python -m espsecure sign-data --version 2 --keyfile $dir/keys/key2.pem --append-signatures -o $dir/bootloader-sbtest.bin $dir/bootloader-2sig.bin
+
+# idf.py leaves the bootloader out when secure boot is configured, so esptool writes it.
+# `just flash <board>` puts the normal firmware back.
+sbtest-flash board="wave_4b": (sbtest-build board)
+    #!/usr/bin/env sh
+    set -e
+    command -v idf.py >/dev/null || . $IDF_PATH/export.sh
+    dir=build_sbtest_{{board}}
+    idf.py -B $dir -D SDKCONFIG=$dir/sdkconfig flash
+    python -m esptool --chip esp32p4 write-flash 0x2000 $dir/bootloader-sbtest.bin
+
 monitor board="wave_4b": (_check_board board)
     #!/usr/bin/env sh
     command -v idf.py >/dev/null || . $IDF_PATH/export.sh
@@ -55,11 +122,26 @@ format:
 test:
     ./scripts/test.sh
 
+# Core host tests built with ASan and UBSan, libwally included
+test-asan:
+    make -C main/core/test clean
+    make -C main/core/test SANITIZE=1 run
+    make -C main/core/test clean
+
+# Fuzz the glue around libwally (ASan and UBSan, coverage-blind driver)
+fuzz iterations="20000":
+    make -C main/core/test clean
+    make -C main/core/test SANITIZE=1 FUZZ_ITERATIONS={{iterations}} fuzz
+    make -C main/core/test clean
+
 clean:
     rm -fRd build build_wave_4b build_wave_35 build_wave_5 build_wave_43 build_crowpanel build_wave_7b build_p4_pico
     rm -fRd build_*_v3
     rm -fRd build_pbkdf2_*
     rm -fRd build_scanprof_*
+    rm -fRd build_release_*
+    rm -fRd build_sbtest_*
+    rm -fRd build_secure_*
     rm -f sdkconfig
     rm -fRd compile_commands.json
     rm -fRd .cache/

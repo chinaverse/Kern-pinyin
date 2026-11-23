@@ -41,10 +41,10 @@ only combination that gets autofocus.
 
 ## Prerequisites
 
-Kern targets [ESP-IDF v6.1](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32p4/get-started/index.html). Install it for the `esp32p4` target:
+Kern targets [ESP-IDF v6.1.1](https://docs.espressif.com/projects/esp-idf/en/v6.1.1/esp32p4/get-started/index.html). Install it for the `esp32p4` target:
 
 ```bash
-git clone --depth 1 --recurse-submodules --shallow-submodules -b v6.1 https://github.com/espressif/esp-idf.git ~/esp/esp-idf
+git clone --depth 1 --recurse-submodules --shallow-submodules -b v6.1.1 https://github.com/espressif/esp-idf.git ~/esp/esp-idf
 ~/esp/esp-idf/install.sh esp32p4
 . ~/esp/esp-idf/export.sh
 ```
@@ -55,7 +55,7 @@ For formatting, host tests, and the desktop simulator, Nix users can enter the d
 nix develop
 ```
 
-The Nix shell intentionally provides host tools only. Firmware builds still require the separate ESP-IDF v6.1 installation above; `just build` uses an existing `IDF_PATH` or falls back to `~/esp/esp-idf`.
+The Nix shell intentionally provides host tools only. Firmware builds still require the separate ESP-IDF v6.1.1 installation above; `just build` uses an existing `IDF_PATH` or falls back to `~/esp/esp-idf`.
 
 ## Build
 
@@ -97,6 +97,8 @@ just clean              # Wipe all build_<board> dirs + sdkconfig
 ```
 
 ESP32-P4 chip revision v3.x needs its own image: ESP-IDF builds for either v0.x/v1.x or v3.x silicon, never both. Append `_v3` to any board (`just build wave_43_v3`, `just flash wave_43_v3`) to build with the `sdkconfig.rev3` overlay into `build_<board>_v3/`. The web flasher reads the chip revision on connect and picks the matching build.
+
+Published releases are built by `scripts/release.sh`, which runs `just build-secure <board>` for every board, into `build_secure_<board>/`. That adds two overlays: `sdkconfig.release` (WARN-level logs, a silent reboot on panic instead of a register and stack dump, silent assertions) and `sdkconfig.secure` (a bootloader that verifies the app, the Secure Boot menu, anti-rollback). The release zip carries the frozen bootloader from `kern_secure_boot/bootloaders/`, not the one that build produces. `just build-release <board>` applies only the release overlay and keeps a plain bootloader, to reproduce release logging and panic behaviour on a development board; `just build` is the development configuration.
 
 Or using `idf.py` directly:
 
@@ -256,7 +258,7 @@ Pre-release firmware is provided **for research and testing purposes only**. Any
 
 ### Steps
 
-1. Download the zip for your device from the [Releases](https://github.com/odudex/Kern/releases) page (e.g. `kern-wave_4b-v0.0.3.zip`).
+1. Download the zip for your device from the [Releases](https://github.com/odudex/Kern/releases) page (e.g. `kern-wave_4b-v0.0.3.zip`). Boards with ESP32-P4 chip revision v3.x need the `_v3` zip (e.g. `kern-wave_4b_v3-v0.0.3.zip`); esptool prints the revision when it connects, as in `Chip type: ESP32-P4 (revision v3.2)`.
 
 2. Unzip the package:
 
@@ -288,7 +290,7 @@ esptool --chip esp32p4 --baud 460800 write-flash 0x0 kern-v0.0.3.hex
 
 ### Updating via SD card
 
-A device already running signed firmware updates without any computer: copy `firmware-signed.bin` from the zip onto a SD card, insert it, and go to **Settings → Firmware Update**. The device verifies the signature before installing and keeps the previous firmware as an automatic fallback.
+A device already running signed firmware updates without any computer: copy `firmware-signed.bin` from the zip (the `_v3` zip on v3.x chips) onto a SD card, insert it, and go to **Settings → Firmware Update**. The device verifies the signature and the chip revision before installing and keeps the previous firmware as an automatic fallback.
 
 ## Community
 

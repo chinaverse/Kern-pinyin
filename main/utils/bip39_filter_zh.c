@@ -2,6 +2,8 @@
 
 #include "bip39_filter_zh.h"
 #include "kern_wally.h"
+#include "secure_mem.h"
+#include <stdio.h>
 #include <string.h>
 #include <wally_bip39.h>
 #include <wally_core.h>
@@ -293,4 +295,52 @@ int bip39_filter_zh_last_word_by_prefix(const char entered_words[24][16],
   }
 
   return count;
+}
+
+bool bip39_filter_zh_complete_last_word(char entered_words[24][16],
+                                        int word_count) {
+  if (!wordlist || !entered_words || (word_count != 12 && word_count != 24))
+    return false;
+
+  int checksum_bits = word_count / 3;
+  size_t entropy_bytes = (size_t)((word_count * 11) - checksum_bits) / 8;
+  uint8_t packed[32] = {0};
+  int bit_pos = 0;
+  char *mnemonic = NULL;
+  bool ok = false;
+
+  // Pack the first N-1 word indices, then the entropy bits (top bits) of the
+  // current last word, 11 bits per index, MSB first.
+  for (int i = 0; i < word_count; i++) {
+    int idx = bip39_filter_zh_get_word_index(entered_words[i]);
+    int bits = 11;
+    if (i == word_count - 1) {
+      if (idx < 0)
+        break;
+      idx >>= checksum_bits;
+      bits = 11 - checksum_bits;
+    } else if (idx < 0) {
+      goto cleanup;
+    }
+    for (int b = bits - 1; b >= 0; b--, bit_pos++) {
+      if (idx & (1 << b))
+        packed[bit_pos / 8] |= (uint8_t)(1 << (7 - (bit_pos % 8)));
+    }
+  }
+
+  if (kern_bip39_mnemonic_from_bytes(wordlist, packed, entropy_bytes,
+                                     &mnemonic) != WALLY_OK ||
+      !mnemonic)
+    goto cleanup;
+  const char *last = strrchr(mnemonic, ' ');
+  if (last) {
+    snprintf(entered_words[word_count - 1], sizeof(entered_words[0]), "%s",
+             last + 1);
+    ok = true;
+  }
+
+cleanup:
+  SECURE_FREE_STRING(mnemonic);
+  secure_memzero(packed, sizeof(packed));
+  return ok;
 }

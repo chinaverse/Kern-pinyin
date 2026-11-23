@@ -4,6 +4,7 @@
 
 #include "../../core/key.h"
 #include "../../core/registry.h"
+#include "../../core/secp_hardening.h"
 #include "../../core/wallet.h"
 #include "../../qr/encoder.h"
 #include "../../ui/assets/icons.h"
@@ -98,6 +99,7 @@ static void mnemonic_confirm_cb(bool confirmed, void *user_data) {
     return;
   }
 
+  secp_blind_refresh();
   registry_init(net == WALLET_NETWORK_TESTNET);
 
   SECURE_FREE_STRING(scan_ctx.scanned_mnemonic);
@@ -105,6 +107,7 @@ static void mnemonic_confirm_cb(bool confirmed, void *user_data) {
   // Return to home — it will recreate with new key info
   if (scan_ctx.return_cb)
     scan_ctx.return_cb();
+  descriptor_loader_show_rejected_notice();
 }
 
 /* Fingerprint + "Replace current key?" confirmation, run once the mnemonic

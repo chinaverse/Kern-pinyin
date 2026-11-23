@@ -37,6 +37,7 @@ fi
 
 DIRS=(
     "$REPO_ROOT/main"
+    "$REPO_ROOT/bootloader_components"
     "$REPO_ROOT/components/secure_memory"
     "$REPO_ROOT/components/bbqr"
     "$REPO_ROOT/components/bip138"
@@ -45,7 +46,6 @@ DIRS=(
     "$REPO_ROOT/components/cUR"
     "$REPO_ROOT/components/deflate_codec"
     "$REPO_ROOT/components/k_quirc"
-    "$REPO_ROOT/components/mbedtls_compat"
     "$REPO_ROOT/components/sd_card"
     "$REPO_ROOT/components/video"
     "$REPO_ROOT/components/wave_4b"

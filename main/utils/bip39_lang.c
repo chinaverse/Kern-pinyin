@@ -30,10 +30,10 @@ int bip39_lang_validate(const char *mnemonic) {
   if (bip39_lang_detect(mnemonic) == BIP39_LANG_ZH) {
     if (!bip39_filter_zh_init())
       return WALLY_ERROR;
-    return bip39_mnemonic_validate(kern_bip39_zh_wordlist(), mnemonic);
+    return kern_bip39_mnemonic_validate(kern_bip39_zh_wordlist(), mnemonic);
   }
 
-  return bip39_mnemonic_validate(NULL, mnemonic);
+  return kern_bip39_mnemonic_validate(NULL, mnemonic);
 }
 
 bool bip39_lang_translate_zh_to_en(const char *mnemonic, char *out,

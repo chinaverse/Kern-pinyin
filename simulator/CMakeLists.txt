@@ -43,13 +43,6 @@ if(NOT MBEDTLS_INCLUDE_DIR AND MBEDTLS_LIB)
   set(MBEDTLS_INCLUDE_DIR "${_mbedtls_prefix}/include")
 endif()
 
-set(MBEDTLS_COMPAT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../components/mbedtls_compat)
-set(MBEDTLS_INCLUDE_DIRS ${MBEDTLS_INCLUDE_DIR})
-if(EXISTS "${MBEDTLS_INCLUDE_DIR}/mbedtls/private/pkcs5.h"
-   AND NOT EXISTS "${MBEDTLS_INCLUDE_DIR}/mbedtls/pkcs5.h")
-  list(PREPEND MBEDTLS_INCLUDE_DIRS ${MBEDTLS_COMPAT_DIR})
-endif()
-
 # --- libwally-core (native desktop build) ---
 set(WALLY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../components/libwally-core)
 
@@ -70,43 +63,26 @@ target_include_directories(wally PRIVATE
     ${WALLY_DIR}/upstream
     ${WALLY_DIR}/upstream/src
     ${WALLY_DIR}/upstream/src/ccan
-    ${WALLY_DIR}/upstream/src/secp256k1
-    ${WALLY_DIR}/upstream/src/secp256k1/src
     ${WALLY_DIR}/upstream/src/secp256k1/include
-    ${WALLY_DIR}/upstream/src/secp256k1/src/modules/ecdh
-    ${WALLY_DIR}/upstream/src/secp256k1/src/modules/ecdsa_adaptor
-    ${WALLY_DIR}/upstream/src/secp256k1/src/modules/ecdsa_s2c
-    ${WALLY_DIR}/upstream/src/secp256k1/src/modules/extrakeys
-    ${WALLY_DIR}/upstream/src/secp256k1/src/modules/generator
-    ${WALLY_DIR}/upstream/src/secp256k1/src/modules/musig
-    ${WALLY_DIR}/upstream/src/secp256k1/src/modules/rangeproof
-    ${WALLY_DIR}/upstream/src/secp256k1/src/modules/recovery
-    ${WALLY_DIR}/upstream/src/secp256k1/src/modules/schnorrsig
-    ${WALLY_DIR}/upstream/src/secp256k1/src/modules/surjection
-    ${WALLY_DIR}/upstream/src/secp256k1/src/modules/whitelist
 )
 
 target_compile_definitions(wally PRIVATE
-    BUILD_ELEMENTS=0
     BUILD_MINIMAL=1
     # Standard libsecp256k1: drops MuSig2 + ecdsa-s2c/anti-exfil (unused by Kern).
     BUILD_STANDARD_SECP=1
     ECMULT_WINDOW_SIZE=8
-    ENABLE_MODULE_ECDH=1
-    ENABLE_MODULE_ECDSA_S2C=1
-    ENABLE_MODULE_EXTRAKEYS=1
-    ENABLE_MODULE_GENERATOR=1
-    ENABLE_MODULE_RANGEPROOF=1
-    ENABLE_MODULE_RECOVERY=1
-    ENABLE_MODULE_SCHNORRSIG=1
-    ENABLE_MODULE_SURJECTIONPROOF=1
-    ENABLE_MODULE_WHITELIST=1
-    HAVE_BUILTIN_POPCOUNT=1
-    NDEBUG=1
 )
 
+if(APPLE)
+    # macOS lacks explicit_bzero; wally_internal_bzero() tries memset_s first
+    target_compile_definitions(wally PRIVATE HAVE_MEMSET_S=1 __STDC_WANT_LIB_EXT1__=1)
+endif()
+
+# Changes the public struct layouts, so every user of the headers needs it.
+target_compile_definitions(wally PUBLIC WALLY_ABI_NO_ELEMENTS)
+
 target_compile_options(wally PRIVATE
-    -w  # suppress all warnings (third-party code)
+    -Wall -Wextra -Wno-unused-parameter
     -fstack-protector-strong
 )
 
@@ -161,6 +137,7 @@ set(STUB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/esp_idf_stubs/efuse_hmac_sim.c
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/esp_idf_stubs/freertos_sim.c
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/esp_idf_stubs/fw_update_sim.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/platform/esp_idf_stubs/secure_boot_sim.c
 )
 
 # --- Application utilities ---
@@ -173,6 +150,7 @@ set(APP_UTIL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/utils/estimated_entropy.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/utils/session.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/utils/utf8.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/utils/text_file.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/utils/worker_task.c
 )
 
@@ -183,16 +161,21 @@ set(APP_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/esp_idf_stubs/storage_sim.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/pin.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/crypto_utils.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/platform/esp_idf_stubs/pbkdf2_sim.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/entropy_pool.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/kef.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/wallet.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/descriptor_parse.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/dice_mnemonic.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/base43.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/descriptor_validator.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/miniscript_policy.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/multisig_setup.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/key.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/message_sign.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/bip322.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/psbt.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/psbt_gate.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/psbt_parse.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/ss_whitelist.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/registry.c
@@ -202,6 +185,12 @@ set(APP_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/descriptor_checksum.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/bip32_path.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/script_templates.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/address_match.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/descriptor_branch.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/descriptor_text.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/secp_hardening.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/crypto_init.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/self_test.c
     # Shared zlib adapter used by KEF and BBQr
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/deflate_codec/src/deflate_codec.c
     # bbqr (multi-part QR encoding)
@@ -289,6 +278,7 @@ set(APP_PAGE_SOURCES
     ${APP_PAGES_DIR}/login/login_scan.c
     ${APP_PAGES_DIR}/login/login_settings.c
     ${APP_PAGES_DIR}/login/security_settings.c
+    ${APP_PAGES_DIR}/login/secure_boot_page.c
     ${APP_PAGES_DIR}/login/about.c
     # Load mnemonic
     ${APP_PAGES_DIR}/load_mnemonic/load_menu.c
@@ -313,6 +303,7 @@ set(APP_PAGE_SOURCES
     ${APP_PAGES_DIR}/settings/wallet_settings.c
     ${APP_PAGES_DIR}/settings/registered_descriptors.c
     ${APP_PAGES_DIR}/settings/firmware_update.c
+    ${APP_PAGES_DIR}/settings/self_test_page.c
     # Shared pages
     ${APP_PAGES_DIR}/shared/address_checker.c
     ${APP_PAGES_DIR}/shared/descriptor_loader.c
@@ -348,6 +339,7 @@ set(APP_PAGE_SOURCES
 # --- QR + k_quirc + cUR ---
 set(QR_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/qr/encoder.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/qr/seedqr.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/qr/parser.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/qr/viewer.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/qr/export.c
@@ -365,6 +357,10 @@ set_target_properties(lvgl PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(lvgl PUBLIC
     ${LVGL_DIR}
     ${LVGL_DIR}/src
+    # Debian's libsdl2-dev drops headers straight under /usr/include (already
+    # a default search path), but Homebrew's puts them under a non-default
+    # prefix; SDL2_INCLUDE_DIRS covers both without changing the Linux path.
+    ${SDL2_INCLUDE_DIRS}
 )
 target_include_directories(lvgl PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -376,7 +372,7 @@ target_compile_definitions(lvgl PRIVATE
     lv_refr_now=kern_lv_refr_now_real
 )
 target_link_libraries(lvgl PUBLIC
-    SDL2
+    ${SDL2_LIBRARIES}
 )
 
 add_executable(kern_simulator
@@ -394,6 +390,9 @@ add_executable(kern_simulator
     ${BIP138_SOURCES}
 )
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/../main/core/sb_digests.cmake)
+kern_generate_sb_digests(${CMAKE_CURRENT_BINARY_DIR}/generated)
+
 # Include paths — order matters: simulator headers shadow ESP-IDF
 target_include_directories(kern_simulator PRIVATE
     # Simulator stubs (highest priority — shadow ESP-IDF headers)
@@ -403,9 +402,10 @@ target_include_directories(kern_simulator PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/sd_card_sim/include
     ${CMAKE_CURRENT_SOURCE_DIR}/platform               # sdkconfig.h
     ${CMAKE_CURRENT_SOURCE_DIR}                         # lv_conf.h
-    ${MBEDTLS_INCLUDE_DIRS}
+    ${MBEDTLS_INCLUDE_DIR}
     # Application source tree
     ${CMAKE_CURRENT_SOURCE_DIR}/../main                 # ui/theme.h, core/, utils/, pages/
+    ${CMAKE_CURRENT_BINARY_DIR}/generated               # kern_sb_digests.h
     # Component headers (for kef.c -> deflate_codec, cUR, k_quirc, video)
     ${CMAKE_CURRENT_SOURCE_DIR}/../components
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/bbqr/src
@@ -418,6 +418,7 @@ target_include_directories(kern_simulator PRIVATE
     # LVGL
     ${LVGL_DIR}
     ${LVGL_DIR}/src
+    ${SDL2_INCLUDE_DIRS}
 )
 
 target_compile_definitions(kern_simulator PRIVATE
@@ -473,7 +474,7 @@ endif()
 
 target_link_libraries(kern_simulator PRIVATE
     lvgl
-    SDL2
+    ${SDL2_LIBRARIES}
     Threads::Threads
     m
     wally
@@ -491,6 +492,7 @@ add_executable(kern_sim_storage_smoke
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/kef.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/base43.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/crypto_utils.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/platform/esp_idf_stubs/pbkdf2_sim.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/core/entropy_pool.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/deflate_codec/src/deflate_codec.c
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/esp_idf_stubs/stubs.c
@@ -505,7 +507,7 @@ target_include_directories(kern_sim_storage_smoke PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/platform/sd_card_sim/include
     ${CMAKE_CURRENT_SOURCE_DIR}/platform
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${MBEDTLS_INCLUDE_DIRS}
+    ${MBEDTLS_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../main
     ${CMAKE_CURRENT_SOURCE_DIR}/../components
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/deflate_codec/src

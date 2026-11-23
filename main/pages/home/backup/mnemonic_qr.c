@@ -906,9 +906,7 @@ void mnemonic_qr_page_create(lv_obj_t *parent, void (*return_cb)(void)) {
   compact_seedqr_data =
       mnemonic_to_compact_seedqr(mnemonic_data, &compact_seedqr_len);
   if (!seedqr_data || !compact_seedqr_data) {
-    secure_memzero(mnemonic_data, strlen(mnemonic_data));
-    wally_free_string(mnemonic_data);
-    mnemonic_data = NULL;
+    SECURE_FREE_STRING(mnemonic_data);
     SECURE_FREE_STRING(mnemonic_display_data);
     SECURE_FREE_STRING(seedqr_data);
     SECURE_FREE_BUFFER(compact_seedqr_data, compact_seedqr_len);
@@ -1053,11 +1051,7 @@ void mnemonic_qr_page_destroy(void) {
     zoom_qr_buf = NULL;
   }
 
-  if (mnemonic_data) {
-    secure_memzero(mnemonic_data, strlen(mnemonic_data));
-    wally_free_string(mnemonic_data);
-    mnemonic_data = NULL;
-  }
+  SECURE_FREE_STRING(mnemonic_data);
   SECURE_FREE_STRING(mnemonic_display_data);
   qr_display_lang = BIP39_LANG_EN;
 

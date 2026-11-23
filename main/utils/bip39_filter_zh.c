@@ -28,6 +28,50 @@ bool bip39_filter_zh_init(void) {
   return wordlist != NULL;
 }
 
+// bip39_zh_pinyin[i] holds one or more space-separated readings (e.g.
+// "xing hang"); a word matches when any of them does.
+static bool reading_matches(const char *readings, const char *input, int len,
+                            bool exact) {
+  const char *r = readings;
+  while (*r) {
+    int n = (int)strcspn(r, " ");
+    if (n >= len && strncmp(r, input, len) == 0 && (!exact || n == len))
+      return true;
+    r += n;
+    while (*r == ' ')
+      r++;
+  }
+  return false;
+}
+
+// Input that is a whole syllable selects only the words read exactly that
+// way. Plain prefix matching mixed in longer syllables ("xian" also listed
+// every "xiang" word) and, for short syllables, overflowed the candidate list
+// ("ji" prefix-matched 145 words, leaving its own 34 unreachable). Longer
+// syllables stay one more letter away; input that is not a syllable yet
+// ("zh", "xio") falls back to prefix matching.
+static bool is_syllable(const char *input, int len) {
+  for (size_t i = 0; i < BIP39_ZH_WORDLIST_SIZE; i++) {
+    if (reading_matches(bip39_zh_pinyin[i], input, len, true))
+      return true;
+  }
+  return false;
+}
+
+// out = prefix followed by letter ('a' + letter), NUL-terminated.
+static void letter_prefix(const char *prefix, int prefix_len, int letter,
+                          char out[BIP39_ZH_MAX_PINYIN_LEN + 2], int *out_len) {
+  int copy_len = 0;
+  if (prefix && prefix_len > 0)
+    copy_len = prefix_len < BIP39_ZH_MAX_PINYIN_LEN ? prefix_len
+                                                    : BIP39_ZH_MAX_PINYIN_LEN;
+  if (copy_len)
+    memcpy(out, prefix, copy_len);
+  out[copy_len] = (char)('a' + letter);
+  out[copy_len + 1] = '\0';
+  *out_len = copy_len + 1;
+}
+
 uint32_t bip39_filter_zh_get_valid_letters(const char *prefix, int prefix_len) {
   uint32_t mask = 0;
   if (!wordlist)
@@ -35,50 +79,17 @@ uint32_t bip39_filter_zh_get_valid_letters(const char *prefix, int prefix_len) {
 
   for (int letter = 0; letter < 26; letter++) {
     char test_prefix[BIP39_ZH_MAX_PINYIN_LEN + 2];
-    int test_len = prefix_len + 1;
-
-    if (prefix && prefix_len > 0) {
-      int copy_len = prefix_len < BIP39_ZH_MAX_PINYIN_LEN
-                        ? prefix_len
-                        : BIP39_ZH_MAX_PINYIN_LEN;
-      memcpy(test_prefix, prefix, copy_len);
-      test_prefix[copy_len] = 'a' + letter;
-      test_prefix[copy_len + 1] = '\0';
-    } else {
-      test_prefix[0] = 'a' + letter;
-      test_prefix[1] = '\0';
-      test_len = 1;
-    }
+    int test_len;
+    letter_prefix(prefix, prefix_len, letter, test_prefix, &test_len);
 
     for (size_t i = 0; i < BIP39_ZH_WORDLIST_SIZE; i++) {
-      if (strncmp(bip39_zh_pinyin[i], test_prefix, test_len) == 0) {
+      if (reading_matches(bip39_zh_pinyin[i], test_prefix, test_len, false)) {
         mask |= (1u << letter);
         break;
       }
     }
   }
   return mask;
-}
-
-// A short pinyin that is itself a full syllable can prefix-match more words
-// than a candidate list holds ("ji" matches 145: ji, jia, jian, jiang, ...),
-// and typing further letters only moves on to the longer syllables, so the
-// words read exactly "ji" (32 of them) would be unreachable. Once the prefix
-// matches overflow BIP39_ZH_MAX_FILTERED_WORDS, narrow to words whose whole
-// reading equals the input; the largest homophone group (33) still fits.
-static bool pinyin_matches(const char *py, const char *prefix, int prefix_len,
-                           bool exact) {
-  return strncmp(py, prefix, prefix_len) == 0 &&
-         (!exact || py[prefix_len] == '\0');
-}
-
-static int count_prefix_matches(const char *prefix, int prefix_len) {
-  int count = 0;
-  for (size_t i = 0; i < BIP39_ZH_WORDLIST_SIZE; i++) {
-    if (strncmp(bip39_zh_pinyin[i], prefix, prefix_len) == 0)
-      count++;
-  }
-  return count;
 }
 
 int bip39_filter_zh_by_prefix(const char *prefix, int prefix_len,
@@ -89,10 +100,9 @@ int bip39_filter_zh_by_prefix(const char *prefix, int prefix_len,
   if (!prefix || prefix_len <= 0)
     return 0;
 
-  bool exact = count_prefix_matches(prefix, prefix_len) >
-               BIP39_ZH_MAX_FILTERED_WORDS;
+  bool exact = is_syllable(prefix, prefix_len);
   for (size_t i = 0; i < BIP39_ZH_WORDLIST_SIZE && count < max_words; i++) {
-    if (pinyin_matches(bip39_zh_pinyin[i], prefix, prefix_len, exact)) {
+    if (reading_matches(bip39_zh_pinyin[i], prefix, prefix_len, exact)) {
       const char *word = bip39_get_word_by_index(wordlist, i);
       if (word)
         out_words[count++] = word;
@@ -108,13 +118,9 @@ int bip39_filter_zh_count_matches(const char *prefix, int prefix_len) {
   if (!prefix || prefix_len <= 0)
     return BIP39_ZH_WORDLIST_SIZE;
 
-  count = count_prefix_matches(prefix, prefix_len);
-  if (count <= BIP39_ZH_MAX_FILTERED_WORDS)
-    return count;
-
-  count = 0;
+  bool exact = is_syllable(prefix, prefix_len);
   for (size_t i = 0; i < BIP39_ZH_WORDLIST_SIZE; i++) {
-    if (pinyin_matches(bip39_zh_pinyin[i], prefix, prefix_len, true))
+    if (reading_matches(bip39_zh_pinyin[i], prefix, prefix_len, exact))
       count++;
   }
   return count;
@@ -233,24 +239,11 @@ bip39_filter_zh_get_valid_letters_for_last_word(const char entered_words[24][16]
   for (int letter = 0; letter < 26; letter++) {
     char test_prefix[BIP39_ZH_MAX_PINYIN_LEN + 2];
     int test_len;
-
-    if (prefix && prefix_len > 0) {
-      int copy_len = prefix_len < BIP39_ZH_MAX_PINYIN_LEN
-                        ? prefix_len
-                        : BIP39_ZH_MAX_PINYIN_LEN;
-      memcpy(test_prefix, prefix, copy_len);
-      test_prefix[copy_len] = 'a' + letter;
-      test_prefix[copy_len + 1] = '\0';
-      test_len = prefix_len + 1;
-    } else {
-      test_prefix[0] = 'a' + letter;
-      test_prefix[1] = '\0';
-      test_len = 1;
-    }
+    letter_prefix(prefix, prefix_len, letter, test_prefix, &test_len);
 
     for (int i = 0; i < valid_last_words_count; i++) {
       const char *py = bip39_zh_pinyin[valid_last_words_cache[i]];
-      if (strncmp(py, test_prefix, test_len) == 0) {
+      if (reading_matches(py, test_prefix, test_len, false)) {
         mask |= (1u << letter);
         break;
       }
@@ -278,18 +271,11 @@ int bip39_filter_zh_last_word_by_prefix(const char entered_words[24][16],
     return count;
   }
 
-  int prefix_count = 0;
-  for (int i = 0; i < valid_last_words_count; i++) {
-    if (strncmp(bip39_zh_pinyin[valid_last_words_cache[i]], prefix,
-                prefix_len) == 0)
-      prefix_count++;
-  }
-  bool exact = prefix_count > BIP39_ZH_MAX_FILTERED_WORDS;
-
+  bool exact = is_syllable(prefix, prefix_len);
   int count = 0;
   for (int i = 0; i < valid_last_words_count && count < max_words; i++) {
     const char *py = bip39_zh_pinyin[valid_last_words_cache[i]];
-    if (pinyin_matches(py, prefix, prefix_len, exact))
+    if (reading_matches(py, prefix, prefix_len, exact))
       out_words[count++] =
           bip39_get_word_by_index(wordlist, valid_last_words_cache[i]);
   }

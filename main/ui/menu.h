@@ -6,7 +6,9 @@
 #include <lvgl.h>
 #include <stdbool.h>
 
-#define UI_MENU_MAX_ENTRIES 20
+// Large enough for the biggest Chinese BIP39 homophone group (see
+// BIP39_ZH_MAX_FILTERED_WORDS): entries past this are dropped.
+#define UI_MENU_MAX_ENTRIES 40
 
 typedef void (*ui_menu_callback_t)(void);
 typedef void (*ui_menu_action_callback_t)(int index);

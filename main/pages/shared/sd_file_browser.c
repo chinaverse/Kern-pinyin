@@ -14,7 +14,9 @@
 /* When a directory holds more entries than the menu can display, one slot is
  * given to a "More..." entry that pages through the listing (wrapping back to
  * the first page). */
-#define BROWSER_MAX_DISPLAYED UI_MENU_MAX_ENTRIES
+#define BROWSER_MAX_DISPLAYED 20
+_Static_assert(BROWSER_MAX_DISPLAYED <= UI_MENU_MAX_ENTRIES,
+               "browser page larger than a menu");
 #define BROWSER_PAGE_SIZE (BROWSER_MAX_DISPLAYED - 1)
 
 #define BROWSER_MAX_FILE_SIZE (256 * 1024)

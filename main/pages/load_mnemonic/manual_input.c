@@ -30,6 +30,8 @@ typedef enum {
 // Large enough for either wordlist's candidate list at once (Chinese
 // pinyin homophone groups run larger than English prefix matches).
 #define MAX_FILTERED_WORDS BIP39_ZH_MAX_FILTERED_WORDS
+_Static_assert(MAX_FILTERED_WORDS <= UI_MENU_MAX_ENTRIES,
+               "word candidates must all fit in the selection menu");
 
 static lv_obj_t *manual_input_screen = NULL;
 static lv_obj_t *back_btn = NULL;
